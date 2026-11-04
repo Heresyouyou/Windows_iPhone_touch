@@ -92,6 +92,11 @@ class HogpWorker(threading.Thread):
         self._hold_at = 0.0
         self.sent = 0
         self.send_fail = 0
+        # 诊断：实际报文速率。BLE 的 notify 是 await 的，真实速率可能远低于
+        # 10ms 节拍——速率上不去，加大增益也只会变成"一跳一跳"。
+        self.stat_t = time.monotonic()
+        self.stat_n = 0
+        self.gain = 0.0
 
     def run(self) -> None:
         asyncio.set_event_loop(self.loop)
@@ -115,6 +120,14 @@ class HogpWorker(threading.Thread):
         while self.shared.running:
             await asyncio.sleep(interval)
             await self._tick()
+            now = time.monotonic()
+            if now - self.stat_t >= 5.0:
+                if self.shared.capturing and self.stat_n:
+                    dt = now - self.stat_t
+                    print(f"  [stat] {self.stat_n / dt:.0f} 报文/秒  "
+                          f"增益 {self.gain:.2f}", flush=True)
+                self.stat_t = now
+                self.stat_n = 0
 
     async def _tick(self) -> None:
         if not self.shared.capturing:
@@ -199,6 +212,7 @@ class HogpWorker(threading.Thread):
 
     async def _send_absolute(self, buttons: int, ax: int, ay: int) -> None:
         self.sent += 1
+        self.stat_n += 1
         if self.dry:
             if self.verbose:
                 print(f"  report id=2 [{buttons:02X} {ax:04X} {ay:04X}]", flush=True)
@@ -214,6 +228,7 @@ class HogpWorker(threading.Thread):
 
     async def _send_relative(self, buttons: int, dx: int, dy: int) -> None:
         self.sent += 1
+        self.stat_n += 1
         if self.dry:
             if self.verbose:
                 print(f"  report id=3 [{buttons:02X} {dx:04d} {dy:04d}]", flush=True)
@@ -339,6 +354,7 @@ class App:
             gain=args.gain,
             accel=args.accel,
         ))
+        self.worker.gain = args.gain
         self.push = PushThrough(args.escape_px)
         # 进入边 → 退出边：从哪边进来，就往哪边推回去
         self.exit_side = ENTRY_SIDE[self.edge.edge]
@@ -508,6 +524,7 @@ class App:
 
     def _set_gain(self, g: float) -> None:
         new = self.vp.set_gain(g)
+        self.worker.gain = new
         print(f"  ⚡ 增益 {new:.2f} iPhone像素/计数", flush=True)
 
     # ---------- 主循环 ----------
