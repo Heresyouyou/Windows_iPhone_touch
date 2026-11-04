@@ -492,15 +492,20 @@ class App:
         self._update_buttons(btn_flags)
 
     def _on_wheel(self, delta: int) -> None:
-        """一格滚轮 = 120 个原始单位，折算成 1 个 HID 档位。"""
-        self._wheel_acc += delta
-        notches = int(self._wheel_acc / 120)   # 向零取整，正负都自然
-        # 只打滚轮，量很小；方向问题必须看原始符号才能定性
-        print(f"  [wheel] raw={delta:+d}  累计={self._wheel_acc:+d}  发={notches:+d}",
-              flush=True)
+        """滚轮 → Report3 第 4 字节（Wheel，int8）。
+
+        两个约定要处理：
+          · Windows 的滚轮符号和 HID 相反，这里翻一次；
+          · 一格原始增量是 120，按 --wheel-scale 折算成 HID 档位
+            （1.5 表示一格发 1.5 档，累计余量下次补上，不是简单取整）。
+        """
+        self._wheel_acc += -delta
+        step = 120.0 / max(0.1, self.args.wheel_scale)
+        notches = int(self._wheel_acc / step)   # 向零取整，正负都自然
+        print(f"  [wheel] raw={delta:+d}  发={notches:+d}", flush=True)
         if notches == 0:
             return
-        self._wheel_acc -= notches * 120
+        self._wheel_acc -= notches * step
         self.worker.send_wheel(notches)
 
     def _move_absolute(self, dx: int, dy: int) -> bool:
@@ -730,6 +735,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="绝对模式速度增益，0=线性(默认)，0.5~1 快划时放大行程")
     ap.add_argument("--escape-px", type=float, default=5.0,
                     help="越过退出边多少像素就释放回 Windows，默认 5")
+    ap.add_argument("--wheel-scale", type=float, default=1.5,
+                    help="滚轮速度：一格滚轮发多少 HID 档位，默认 1.5")
     ap.add_argument("--sensitivity", type=float, default=1.0, help="相对模式灵敏度倍数，默认 1.0")
     ap.add_argument("--enter-threshold", type=int, default=12, help="进入捕获所需朝外计数")
     ap.add_argument("--exit-threshold", type=int, default=60,
