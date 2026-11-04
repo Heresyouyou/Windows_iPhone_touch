@@ -270,14 +270,16 @@ class HogpService:
         except Exception:
             return False
 
-    async def send_mouse(self, buttons: int, dx: int, dy: int) -> bool:
+    async def send_mouse(self, buttons: int, dx: int, dy: int, wheel: int = 0) -> bool:
         """鼠标位移同时按两种编码发出，但只发往真有订阅者的通道。
 
         关键：WinRT 的 notify_value_async 在没有订阅者时**不报错**，只是静默丢弃。
         所以"发送成功"不等于"报文送达"，必须自己查 subscribed_clients。
+
+        Boot 报表只有 3 字节，没有滚轮字段；带滚轮时只能走 Report 协议。
         """
         ok = False
-        if self._boot_mouse is not None and self._has_client(self._boot_mouse):
+        if wheel == 0 and self._boot_mouse is not None and self._has_client(self._boot_mouse):
             # Boot 鼠标格式：buttons(3 bit) + dx(int8) + dy(int8)
             try:
                 await self._boot_mouse.notify_value_async(
@@ -291,7 +293,7 @@ class HogpService:
         if char is not None and self._has_client(char):
             try:
                 await char.notify_value_async(
-                    _buf(hid.encode_relative_mouse(buttons, dx, dy))
+                    _buf(hid.encode_relative_mouse(buttons, dx, dy, wheel))
                 )
                 ok = True
             except Exception:

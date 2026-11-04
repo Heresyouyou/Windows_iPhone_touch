@@ -97,6 +97,7 @@ class HogpWorker(threading.Thread):
         # 10ms 节拍——速率上不去，加大增益也只会变成"一跳一跳"。
         self.stat_t = time.monotonic()
         self.stat_n = 0
+        self.stat_tick = 0
         self.gain = 0.0
 
     def run(self) -> None:
@@ -126,11 +127,14 @@ class HogpWorker(threading.Thread):
                 if self.shared.capturing and self.stat_n:
                     dt = now - self.stat_t
                     print(f"  [stat] {self.stat_n / dt:.0f} 报文/秒  "
-                          f"增益 {self.gain:.2f}", flush=True)
+                          f"节拍 {self.stat_tick / dt:.0f}/秒  增益 {self.gain:.2f}",
+                          flush=True)
                 self.stat_t = now
                 self.stat_n = 0
+                self.stat_tick = 0
 
     async def _tick(self) -> None:
+        self.stat_tick += 1
         if not self.shared.capturing:
             return
         if self.mode == "absolute":
@@ -258,6 +262,23 @@ class HogpWorker(threading.Thread):
         except Exception:
             pass
 
+    def send_wheel(self, notches: int) -> None:
+        """滚轮：Report3 的第 4 字节（int8）。一格 = ±1。
+
+        必须立即发、不走 10ms 节拍——滚轮是离散事件，攒到下一拍就丢了手感。
+        """
+        if self.dry or self.loop is None:
+            return
+        n = max(-127, min(127, int(notches)))
+        if n == 0:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.svc.send_mouse(0, 0, 0, n), self.loop
+            )
+        except Exception:
+            pass
+
     def invalidate_absolute(self) -> None:
         """让下一次节拍无条件发一条绝对报文。
 
@@ -362,6 +383,9 @@ class App:
         # 进入边 → 退出边：从哪边进来，就往哪边推回去
         self.exit_side = ENTRY_SIDE[self.edge.edge]
         self._last_event_t = time.monotonic()
+        self._ev_n = 0
+        self._ev_t = time.monotonic()
+        self._wheel_acc = 0
 
     # ---------- 捕获 ----------
 
@@ -372,6 +396,7 @@ class App:
         self.keyboard.active = True
         self.push.reset()
         self._last_event_t = time.monotonic()
+        self._wheel_acc = 0
         self.kb.clear()
 
         # 落点由"从哪条边进来"决定：入口边就是 iPhone 靠 Windows 的那一侧，
@@ -440,13 +465,17 @@ class App:
 
     # ---------- 输入 ----------
 
-    def on_mouse(self, dx: int, dy: int, btn_flags: int) -> None:
+    def on_mouse(self, dx: int, dy: int, btn_flags: int, wheel: int = 0) -> None:
+        self._ev_n += 1
         if not self.shared.capturing:
             cx, cy = winput.cursor_pos()
             if self.trigger.update(self.edge, cx, cy, dx, dy) is Change.Entered:
                 # 触发用的这一下位移不再计入手机端，否则刚进来就离边界半步
                 self.begin_capture()
             return
+
+        if wheel:
+            self._on_wheel(wheel)
 
         if self.mode == "absolute":
             if not self._move_absolute(dx, dy):
@@ -461,6 +490,18 @@ class App:
             self._move_relative(dx, dy)
 
         self._update_buttons(btn_flags)
+
+    def _on_wheel(self, delta: int) -> None:
+        """一格滚轮 = 120 个原始单位，折算成 1 个 HID 档位。"""
+        self._wheel_acc += delta
+        notches = int(self._wheel_acc / 120)   # 向零取整，正负都自然
+        # 只打滚轮，量很小；方向问题必须看原始符号才能定性
+        print(f"  [wheel] raw={delta:+d}  累计={self._wheel_acc:+d}  发={notches:+d}",
+              flush=True)
+        if notches == 0:
+            return
+        self._wheel_acc -= notches * 120
+        self.worker.send_wheel(notches)
 
     def _move_absolute(self, dx: int, dy: int) -> bool:
         """虚拟坐标累积 + 顶边退出判定。返回 False 表示已经退出捕获。"""
@@ -605,6 +646,13 @@ class App:
         try:
             while self.shared.running:
                 self._drain_keys()
+                now = time.monotonic()
+                if now - self._ev_t >= 5.0:
+                    if self.shared.capturing:
+                        print(f"  [ev]   {self._ev_n / (now - self._ev_t):.0f} 输入事件/秒",
+                              flush=True)
+                    self._ev_t = now
+                    self._ev_n = 0
                 if not self.win.pump_once(1):
                     break
         except KeyboardInterrupt:

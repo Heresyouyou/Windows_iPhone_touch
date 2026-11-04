@@ -64,6 +64,8 @@ VK_OEM_MINUS = 0xBD    # 主键盘 -/_
 RID_INPUT = 0x10000003
 RIDEV_INPUTSINK = 0x00000100
 RIM_TYPEMOUSE = 0
+RI_MOUSE_WHEEL = 0x0400
+RI_MOUSE_HWHEEL = 0x0800
 
 WH_MOUSE_LL = 14
 WH_KEYBOARD_LL = 13
@@ -101,19 +103,20 @@ class RAWINPUTHEADER(ctypes.Structure):
     ]
 
 
-class _BUTTONS(ctypes.Union):
-    _fields_ = [
-        ("ulButtons", wt.ULONG),
-        ("usButtonFlags", wt.USHORT),
-        ("usButtonData", wt.USHORT),
-    ]
-
-
 class RAWMOUSE(ctypes.Structure):
-    _anonymous_ = ("u",)
+    """对应 Windows 的 RAWMOUSE。
+
+    别用 Union 表达 ulButtons / usButtonFlags / usButtonData：
+    ctypes 的 Union 所有字段都从偏移 0 开始，usButtonData 会和 usButtonFlags
+    重叠，读出来永远是 flags 本身（滚轮 delta 恒为正 → 只能往一个方向滚）。
+    C 里 usButtonData 其实是联合体里的第二个 USHORT，偏移 2。
+    这里直接按内存布局平铺。
+    """
+
     _fields_ = [
         ("usFlags", wt.USHORT),
-        ("u", _BUTTONS),
+        ("usButtonFlags", wt.USHORT),
+        ("usButtonData", wt.USHORT),
         ("ulRawButtons", wt.ULONG),
         ("lLastX", wt.LONG),
         ("lLastY", wt.LONG),
@@ -407,7 +410,11 @@ class RawInputWindow:
         # MOUSE_MOVE_RELATIVE = 0；绝对值模式（触控板/远程桌面）下 lLast 是屏幕坐标，不能用
         if ri.mouse.usFlags & 0x01:
             return
-        self._on_mouse(ri.mouse.lLastX, ri.mouse.lLastY, ri.mouse.usButtonFlags)
+        wheel = 0
+        if ri.mouse.usButtonFlags & RI_MOUSE_WHEEL:
+            # usButtonData 是 USHORT 存的**有符号**增量：一格 ±120
+            wheel = ctypes.c_short(ri.mouse.usButtonData).value
+        self._on_mouse(ri.mouse.lLastX, ri.mouse.lLastY, ri.mouse.usButtonFlags, wheel)
 
     def pump_once(self, timeout_ms: int = 50) -> bool:
         """处理一条消息。返回 False 表示收到 WM_QUIT。"""
