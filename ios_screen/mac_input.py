@@ -298,6 +298,7 @@ class EventTap:
         should_swallow,
         on_tap_disabled=None,
         verbose=False,
+        force_listen_only=False,
     ) -> None:
         self.on_mouse = on_mouse          # (dx, dy) -> None
         self.on_button = on_button        # (bit, down) -> None
@@ -306,6 +307,9 @@ class EventTap:
         self.should_swallow = should_swallow  # () -> bool
         self.on_tap_disabled = on_tap_disabled
         self.verbose = verbose
+        # 只读模式：只观察、绝不吞任何事件。远程键鼠（Deskflow）的位移
+        # 只在这里看得见，但绝不能因此改变系统的输入行为。
+        self.force_listen_only = bool(force_listen_only)
 
         self.tap = None
         self.source = None
@@ -313,6 +317,10 @@ class EventTap:
         self.listen_only = False
         self.timeouts = 0
         self.swallowed = 0
+        # 最近一次按钮/滚轮事件发生的屏幕坐标（顶部原点）。
+        # 回调签名保持 (bit, down) 不变——消费方按需读这里，避免破坏既有调用点。
+        self.last_button_pos: tuple[float, float] = (0.0, 0.0)
+        self.last_scroll_pos: tuple[float, float] = (0.0, 0.0)
         self._cb = self._callback       # 必须持引用，否则回调会被回收
         self._started = False
 
@@ -339,11 +347,18 @@ class EventTap:
             mask |= 1 << t
 
         # 先试能吞的 HID tap；没有辅助功能权限时退到只监听，功能降级但不崩
-        for location, option in (
-            (TAP_LOCATION_HID, TAP_OPTION_DEFAULT),
-            (TAP_LOCATION_HID, TAP_OPTION_LISTEN_ONLY),
-            (TAP_LOCATION_SESSION, TAP_OPTION_LISTEN_ONLY),
-        ):
+        if self.force_listen_only:
+            candidates = (
+                (TAP_LOCATION_HID, TAP_OPTION_LISTEN_ONLY),
+                (TAP_LOCATION_SESSION, TAP_OPTION_LISTEN_ONLY),
+            )
+        else:
+            candidates = (
+                (TAP_LOCATION_HID, TAP_OPTION_DEFAULT),
+                (TAP_LOCATION_HID, TAP_OPTION_LISTEN_ONLY),
+                (TAP_LOCATION_SESSION, TAP_OPTION_LISTEN_ONLY),
+            )
+        for location, option in candidates:
             tap = Quartz.CGEventTapCreate(
                 location, TAP_HEAD_INSERT, option, mask, self._cb, None
             )
@@ -423,6 +438,11 @@ class EventTap:
                         Quartz.kCGEventRightMouseDown,
                         Quartz.kCGEventOtherMouseDown,
                     )
+                    try:
+                        p = Quartz.CGEventGetLocation(event)
+                        self.last_button_pos = (float(p.x), float(p.y))
+                    except Exception:
+                        pass
                     consumed = bool(self.on_button(bit, down))
             elif type_ == Quartz.kCGEventScrollWheel:
                 # DeltaAxis1 是"行"增量：普通鼠标一格 ±1，触控板是连续小数
@@ -435,6 +455,11 @@ class EventTap:
                     )
                 )
                 if d:
+                    try:
+                        p = Quartz.CGEventGetLocation(event)
+                        self.last_scroll_pos = (float(p.x), float(p.y))
+                    except Exception:
+                        pass
                     consumed = bool(self.on_scroll(float(d), continuous))
             elif type_ in (Quartz.kCGEventKeyDown, Quartz.kCGEventKeyUp):
                 code = int(

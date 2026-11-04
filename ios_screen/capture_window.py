@@ -134,11 +134,25 @@ class _OverlayView(NSView):
 class CaptureWindow:
     """全屏透明抓取层。show/hide 幂等。"""
 
-    def __init__(self, on_button, on_scroll, on_key, verbose=False) -> None:
+    def __init__(
+        self,
+        on_button,
+        on_scroll,
+        on_key,
+        verbose=False,
+        frame_provider=None,
+    ) -> None:
         self.on_button = on_button      # (bit, down) -> None
         self.on_scroll = on_scroll      # (delta, continuous) -> None
         self.on_key = on_key            # (keycode, down, flags) -> None
         self.verbose = verbose
+        # () -> (x, y, w, h) | None。返回 None 时用所有屏幕的并集。
+        #
+        # 虚拟屏模式下必须绕开虚拟屏：实测 CGVirtualDisplay 那块屏上的窗口
+        # **收不到鼠标事件**（窗口 frame 盖住了、hitTest 也命中，但 mouseDown
+        # 就是不派发；同一位置的点击，只读 tap 却看得一清二楚）。
+        # 既然盖不住，就别盖——让它穿透到虚拟屏的空桌面，点击由 tap 转发。
+        self.frame_provider = frame_provider
 
         self._win = None
         self._view = None
@@ -149,9 +163,14 @@ class CaptureWindow:
 
     # ------------------------------------------------------------ 构建
 
-    def _ensure(self) -> None:
-        if self._win is not None:
-            return
+    def _target_rect(self):
+        if self.frame_provider is not None:
+            try:
+                r = self.frame_provider()
+                if r is not None:
+                    return NSMakeRect(r[0], r[1], r[2], r[3])
+            except Exception:
+                pass
 
         # 覆盖所有屏幕的并集：只盖主屏的话，光标跑到第二块屏上点击就漏出去了
         x0 = y0 = float("inf")
@@ -164,7 +183,13 @@ class CaptureWindow:
             y1 = max(y1, float(f.origin.y) + float(f.size.height))
         if x1 <= x0 or y1 <= y0:
             x0, y0, x1, y1 = 0.0, 0.0, 1920.0, 1080.0
-        union = NSMakeRect(x0, y0, x1 - x0, y1 - y0)
+        return NSMakeRect(x0, y0, x1 - x0, y1 - y0)
+
+    def _ensure(self) -> None:
+        if self._win is not None:
+            return
+
+        union = self._target_rect()
 
         win = _OverlayWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             union, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False
@@ -190,10 +215,41 @@ class CaptureWindow:
 
     # ------------------------------------------------------------ 显示
 
+    def _sync_frame(self) -> None:
+        """让窗口跟上 frame_provider 的当前答案。
+
+        虚拟屏是运行中才建起来的，窗口可能先用并集建过一次。不跟着改的话，
+        窗口会一直盖着那块屏——盖了也没用（那上面收不到鼠标事件），
+        还会挡住 tap 之外的正常穿透。
+        """
+        if self.frame_provider is None or self._win is None:
+            return
+        want = self._target_rect()
+        f = self._win.frame()
+        if (
+            abs(f.origin.x - want.origin.x) < 0.5
+            and abs(f.origin.y - want.origin.y) < 0.5
+            and abs(f.size.width - want.size.width) < 0.5
+            and abs(f.size.height - want.size.height) < 0.5
+        ):
+            return
+        self._win.setFrame_display_(want, True)
+        if self._view is not None:
+            self._view.setFrame_(
+                NSMakeRect(0.0, 0.0, want.size.width, want.size.height)
+            )
+        if self.verbose:
+            print(
+                f"  [win] 抓取层改盖 ({want.origin.x:.0f},{want.origin.y:.0f}) "
+                f"{want.size.width:.0f}x{want.size.height:.0f}",
+                flush=True,
+            )
+
     def show(self) -> None:
         if self.shown:
             return
         self._ensure()
+        self._sync_frame()
         # 记下原来最前面的应用，退出时还给它——捕获期间焦点被我们抢走了
         try:
             self._prev_app = NSWorkspace.sharedWorkspace().frontmostApplication()

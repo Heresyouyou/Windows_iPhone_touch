@@ -318,6 +318,7 @@ class Controller:
         self._pending_warp: tuple[float, float] | None = None
         self._warp_count = 0
         self._warp_after = (0.0, 0.0)     # 最近一次归位的目标点
+        self._grace_until = 0.0           # 进入捕获后的退出判定宽限期
 
     # ------------------------------------------------------------ 子类钩子
 
@@ -327,6 +328,7 @@ class Controller:
             return
         self.capturing = True
         self.push.reset()
+        self._grace_until = time.monotonic() + 0.25
         self._last_event_t = time.monotonic()
         self._wheel_acc = 0.0
         self.kb.clear()
@@ -429,6 +431,17 @@ class Controller:
                 self._dbg_dy = 0
 
         applied = self.vp.move(dx, dy, dt)
+        # 刚进来的这一小段不判退出。
+        #
+        # 推鼠标到边缘再顶出去，手上总有回抽；远程控制（Deskflow）更明显——
+        # 它的位移是成块送来的（实测一次 -192、-31），而退出阈值只有几十像素，
+        # 于是一进入就被判成"退回去"，表现是"进去闪一下又回到 Mac"。
+        # 250ms 足够盖住这段惯性，又不影响主动退回。
+        now2 = time.monotonic()
+        if now2 < self._grace_until:
+            self.push.reset()
+            self.target_x, self.target_y = self.vp.x, self.vp.y
+            return True
         # 有符号行程：进入点 = 0，往外为负；负到 escape_px 就释放回 Mac
         excess = self.vp.edge_excess_px(dx, dy, self.exit_side, applied)
         if self.push.update(excess > 0, excess):

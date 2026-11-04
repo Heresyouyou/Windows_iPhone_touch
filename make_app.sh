@@ -28,6 +28,20 @@ fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+# 虚拟屏工具：用 CGVirtualDisplay 造一块贴在主屏右侧的显示器，
+# 让 iPhone 在系统层面就是"右边多出来的一块屏"。
+# 不编译也能跑（会退回边缘触发模式），所以失败只警告、不中断打包。
+if [ -f "$ROOT/native/vdisplay.m" ]; then
+  if clang -fobjc-arc -O2 -framework Cocoa -framework CoreGraphics \
+        -o "$ROOT/native/vdisplay" "$ROOT/native/vdisplay.m" 2>/tmp/vdisplay-build.log; then
+    echo "已编译 native/vdisplay"
+  else
+    echo "⚠️ 虚拟屏工具编译失败，将退回边缘触发模式："
+    sed -n '1,6p' /tmp/vdisplay-build.log
+    rm -f "$ROOT/native/vdisplay"
+  fi
+fi
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
