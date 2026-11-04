@@ -229,15 +229,38 @@ of invalid calibration files.
 |---|---|
 | No iPhone screen on the PC | Windows has no official USB capture channel (use iPhoneMirror for mirroring and turn off its Bluetooth control) |
 | Single-finger only | iOS HID mouse model has no multi-touch injection |
-| No clipboard sync | HID carries keyboard and mouse only |
+| No clipboard sync | HID carries keyboard and mouse only — see the two-hop chain below |
 | Re-pair after changing the Report Map | iOS caches the HOGP database |
 | Relative mode drifts | Blind control gets no pointer feedback; re-home periodically |
+
+## Clipboard across iPhone → Mac → Windows
+
+There is no system-level clipboard path from iOS to Windows, and this project's HID
+channel only carries keystrokes. The workable chain is two hops:
+
+```
+iPhone  ──[Universal Clipboard]──►  Mac  ──[AgentBridge]──►  Windows
+```
+
+1. **iPhone → Mac: Universal Clipboard.** Copy on the phone, paste on the Mac. Requires
+   the same Apple Account, Bluetooth **and** Wi-Fi on, Handoff enabled on both, and the
+   two devices within ~10 m. The item only lives for a short window, so copy and paste
+   within a minute or two. (AirDrop is not this feature — it moves files, not the clipboard.)
+2. **Mac → Windows: [Deskflow-File-Poster](https://github.com/Heresyouyou/Deskflow-File-Poster).**
+   It pairs Deskflow (one keyboard and mouse across both machines) with AgentBridge, a
+   small HTTP bridge whose `clipwatch` mirrors the clipboard between Mac and Windows and
+   also moves files, text and images in both directions. Deskflow's own `clipboardSharing`
+   stays off; AgentBridge does the clipboard work.
+
+Net effect: copy on the iPhone, paste on Windows a moment later, and the same in reverse.
+Setup steps, token and port numbers live in that repository's README.
 
 ## Related projects
 
 - [YueChen-C/iPhone-use](https://github.com/YueChen-C/iPhone-use) — macOS original (MIT); source of the Report Map and calibration data
 - [RayrenSX/iPhoneMirror](https://github.com/RayrenSX/iPhoneMirror) — Windows mirroring + BLE reverse control (GPL-3.0); the `EncryptionRequired` clue came from here
 - [misterye/deskflow-hid](https://github.com/misterye/deskflow-hid) — same goal, but requires an ESP32-C3 hardware bridge
+- [Deskflow-File-Poster](https://github.com/Heresyouyou/Deskflow-File-Poster) — companion project: Deskflow KVM + AgentBridge for clipboard/file/text transfer between Mac and Windows
 
 ## License
 
@@ -466,15 +489,36 @@ python -m unittest discover -s tests -v
 |---|---|
 | 电脑上看不到 iPhone 画面 | Windows 无官方 USB 采集通道（需要投屏就用 iPhoneMirror，关掉它的蓝牙反控） |
 | 只能单指操作 | iOS 的 HID 鼠标模型不支持注入多指手势 |
-| 剪贴板不能同步 | HID 只传键鼠 |
+| 剪贴板不能同步 | HID 只传键鼠——见下方「两跳」方案 |
 | 改了 Report Map 要重新配对 | iOS 会缓存 HOGP 数据库 |
 | 相对模式会漂移 | 盲控拿不到指针反馈，需要定期归位 |
+
+## 剪贴板：iPhone → Mac → Windows
+
+iOS 到 Windows 没有系统级剪贴板通道，本项目的 HID 也只传键盘鼠标。可用的链路是两跳：
+
+```
+iPhone  ──[通用剪贴板]──►  Mac  ──[AgentBridge]──►  Windows
+```
+
+1. **iPhone → Mac：通用剪贴板。** 手机上复制，Mac 上粘贴。条件是同一个 Apple 账户、
+   蓝牙**和** Wi-Fi 都开、两端都开「接力」、两台设备相距约 10 米内。内容只在另一台
+   设备的剪贴板上停留很短一段时间，复制完一两分钟内就要粘贴。（AirDrop 不是这个功能，
+   它传的是文件，不是剪贴板。）
+2. **Mac → Windows：[Deskflow-File-Poster](https://github.com/Heresyouyou/Deskflow-File-Poster)。**
+   这个仓库把 Deskflow（一套键鼠跨两台机器）和 AgentBridge 搭在一起：后者是一个小型
+   HTTP 桥，其中的 `clipwatch` 负责在 Mac 与 Windows 之间镜像剪贴板，同时也双向传
+   文件、文本和图片。Deskflow 自带的 `clipboardSharing` 保持关闭，剪贴板交给 AgentBridge。
+
+合起来就是：手机上复制，片刻后在 Windows 上粘贴，反方向同理。安装步骤、令牌和端口
+都在那个仓库的 README 里。
 
 ## 相关开源项目
 
 - [YueChen-C/iPhone-use](https://github.com/YueChen-C/iPhone-use) — macOS 原版（MIT），本项目 Report Map 与校准数据的来源
 - [RayrenSX/iPhoneMirror](https://github.com/RayrenSX/iPhoneMirror) — Windows 投屏 + BLE 反控（GPL-3.0），`EncryptionRequired` 这条线索来自它
 - [misterye/deskflow-hid](https://github.com/misterye/deskflow-hid) — 同目标，但依赖 ESP32-C3 硬件桥
+- [Deskflow-File-Poster](https://github.com/Heresyouyou/Deskflow-File-Poster) — 配套项目：Deskflow 跨屏键鼠 + AgentBridge 在 Mac 与 Windows 之间传剪贴板/文件/文本
 
 ## 许可
 
