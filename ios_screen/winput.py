@@ -14,6 +14,8 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes as wt
 
+from collections import deque
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -64,7 +66,14 @@ RIDEV_INPUTSINK = 0x00000100
 RIM_TYPEMOUSE = 0
 
 WH_MOUSE_LL = 14
+WH_KEYBOARD_LL = 13
 HC_ACTION = 0
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
+VK_CONTROL = 0x11
+VK_MENU = 0x12
 WM_MOUSEMOVE = 0x0200
 LLMHF_INJECTED = 0x00000001
 WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
@@ -126,6 +135,16 @@ class MSLLHOOKSTRUCT(ctypes.Structure):
     ]
 
 
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wt.DWORD),
+        ("scanCode", wt.DWORD),
+        ("flags", wt.DWORD),
+        ("time", wt.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
 HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wt.WPARAM, wt.LPARAM)
 
 # ---- 函数签名：不声明 argtypes 在 64 位下会把句柄截断成 32 位 ----
@@ -154,6 +173,8 @@ user32.UnregisterHotKey.restype = wt.BOOL
 
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
 user32.GetCursorPos.restype = wt.BOOL
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = wt.SHORT
 user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 user32.SetCursorPos.restype = wt.BOOL
 user32.ShowCursor.argtypes = [wt.BOOL]
@@ -437,6 +458,54 @@ class MouseSwallower:
                 ms = ctypes.cast(lparam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
                 # 自己用 SetCursorPos 触发的事件要放行，否则会把系统自己的定位也吃掉
                 if not (ms.flags & LLMHF_INJECTED):
+                    self.swallowed += 1
+                    return 1
+        except Exception:
+            pass
+        return user32.CallNextHookEx(self.hook, code, wparam, lparam)
+
+
+class KeyboardForwarder:
+    """捕获期间劫持键盘，把按键交给 iPhone。
+
+    和鼠标一样，回调里只做入队——低级钩子有 ~300ms 超时，超时会被系统静默摘钩。
+    按键状态机（组合键、6KRO 上限）在主线程里跑，钩子只负责"按下/抬起 + 吞掉"。
+
+    自己的全局热键必须放行，否则 RegisterHotKey 永远收不到（Ctrl+Alt+Q 就失效了）。
+    """
+
+    def __init__(self) -> None:
+        self.active = False
+        self.hook = None
+        self._proc_ref = HOOKPROC(self._proc)
+        self.events: deque[tuple[int, bool]] = deque(maxlen=128)
+        self.swallowed = 0
+
+    def install(self) -> None:
+        self.hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc_ref, None, 0)
+        if not self.hook:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def uninstall(self) -> None:
+        if self.hook:
+            user32.UnhookWindowsHookEx(self.hook)
+            self.hook = None
+
+    @staticmethod
+    def _is_own_hotkey(vk: int) -> bool:
+        def down(key: int) -> bool:
+            return bool(user32.GetAsyncKeyState(key) & 0x8000)
+
+        return (down(VK_CONTROL) and down(VK_MENU)
+                and vk in (VK_Q, VK_OEM_PLUS, VK_OEM_MINUS))
+
+    def _proc(self, code, wparam, lparam):
+        try:
+            if code == HC_ACTION and self.active:
+                kb = ctypes.cast(lparam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                if not self._is_own_hotkey(kb.vkCode):
+                    down = wparam in (WM_KEYDOWN, WM_SYSKEYDOWN)
+                    self.events.append((int(kb.vkCode), down))
                     self.swallowed += 1
                     return 1
         except Exception:

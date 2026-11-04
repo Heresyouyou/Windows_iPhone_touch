@@ -27,6 +27,7 @@ from .edge_trigger import (
 )
 from .geometry import Rect
 from .hogp import HogpService
+from .keymap import KeyboardState
 from .vpointer import PointerConfig, PushThrough, VirtualPointer
 from . import winput
 
@@ -330,6 +331,8 @@ class App:
         )
         self.cursor = winput.CursorGuard()
         self.swallower = winput.MouseSwallower()
+        self.keyboard = winput.KeyboardForwarder()
+        self.kb = KeyboardState()
         self.win: winput.RawInputWindow | None = None
 
         mon = winput.pick_monitor(args.screen)
@@ -366,8 +369,10 @@ class App:
         self.shared.capturing = True
         self.cursor.hide()
         self.swallower.active = True
+        self.keyboard.active = True
         self.push.reset()
         self._last_event_t = time.monotonic()
+        self.kb.clear()
 
         # 落点由"从哪条边进来"决定：入口边就是 iPhone 靠 Windows 的那一侧，
         # 于是往回推就是原路返回。另一个轴按光标在边上的比例映射，符合
@@ -414,6 +419,10 @@ class App:
 
         self.shared.capturing = False
         self.swallower.active = False
+        self.keyboard.active = False
+        # 退出时把键盘也放开，否则 iPhone 上会一直按着某个键
+        if self.kb.clear():
+            self.worker.send_report(hid.RID_KEYBOARD, self.kb.report())
         self.cursor.show()
         self.trigger.reset()
         # 放回边缘内侧一点，否则会立刻再次触发进入，形成"进-退-进"的抖动
@@ -509,6 +518,19 @@ class App:
         else:
             self.worker.send_mouse_now(after)
 
+    def _drain_keys(self) -> None:
+        """把钩子回调里攒下的按键事件转成 HID 报文。
+
+        钩子只入队、不发送：发送要走 asyncio 线程，在 ~300ms 超时的回调里做不了。
+        """
+        while self.keyboard.events:
+            vk, down = self.keyboard.events.popleft()
+            if not self.shared.capturing:
+                continue
+            changed = self.kb.press(vk) if down else self.kb.release(vk)
+            if changed:
+                self.worker.send_report(hid.RID_KEYBOARD, self.kb.report())
+
     def force_exit(self) -> None:
         """Ctrl+Alt+Q：捕获中先退出捕获，再按一次结束程序。"""
         if self.shared.capturing:
@@ -572,14 +594,17 @@ class App:
         if not (fast_ok and slow_ok):
             print("⚠️ Ctrl+Alt+= / Ctrl+Alt+- 调速热键注册失败，只能靠 --gain 启动参数。")
         self.swallower.install()
+        self.keyboard.install()
 
         print("\n就绪。鼠标推向屏幕%s缘即接管 iPhone，落点在对侧 iPhone 的%s边（记为 0）；"
               "往回推越过该边 %.0fpx 即释放回 Windows。\n"
-              "      Ctrl+Alt+= 加快 / Ctrl+Alt+- 放慢 / Ctrl+Alt+Q 释放（空闲时退出）。\n"
+              "      捕获期间键盘一并转给 iPhone；Ctrl+Alt+= 加快 / Ctrl+Alt+- 放慢 / "
+              "Ctrl+Alt+Q 释放（空闲时退出）。\n"
               % (_EDGE_CN[self.edge.edge], _SIDE_CN[self.exit_side], self.push.threshold))
 
         try:
             while self.shared.running:
+                self._drain_keys()
                 if not self.win.pump_once(1):
                     break
         except KeyboardInterrupt:
@@ -593,6 +618,9 @@ class App:
             return
         self._shutdown_done = True
         self.shared.capturing = False
+        if self.kb.clear():
+            self.worker.send_report(hid.RID_KEYBOARD, self.kb.report())
+        self.keyboard.uninstall()
         self.swallower.uninstall()
         self.cursor.show()  # 最后一道保险：无论如何先把系统指针还回去
         self.worker.stop()
