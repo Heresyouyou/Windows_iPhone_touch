@@ -104,23 +104,27 @@ class RAWINPUTHEADER(ctypes.Structure):
 
 
 class RAWMOUSE(ctypes.Structure):
-    """对应 Windows 的 RAWMOUSE。
+    """对应 Windows 的 RAWMOUSE（x64 下 24 字节）。
 
-    别用 Union 表达 ulButtons / usButtonFlags / usButtonData：
-    ctypes 的 Union 所有字段都从偏移 0 开始，usButtonData 会和 usButtonFlags
-    重叠，读出来永远是 flags 本身（滚轮 delta 恒为正 → 只能往一个方向滚）。
-    C 里 usButtonData 其实是联合体里的第二个 USHORT，偏移 2。
-    这里直接按内存布局平铺。
+    布局要点（踩过两次坑）：
+      1. C 里 usFlags 后面有 2 字节对齐填充，因为随后的联合体按 ULONG 对齐到 4。
+         所以 usButtonFlags 在偏移 4、usButtonData 在 6，不是 2 和 4。
+      2. 不能用 ctypes.Union 表达 ulButtons / usButtonFlags / usButtonData：
+         联合体所有字段都从同一偏移开始，usButtonData 会覆盖 flags，
+         滚轮增量就永远等于 flags（0x0400 = +1024，只能单向滚）。
+
+    这里直接把联合体摊平，并保留那 2 字节填充。
     """
 
     _fields_ = [
-        ("usFlags", wt.USHORT),
-        ("usButtonFlags", wt.USHORT),
-        ("usButtonData", wt.USHORT),
-        ("ulRawButtons", wt.ULONG),
-        ("lLastX", wt.LONG),
-        ("lLastY", wt.LONG),
-        ("ulExtraInformation", wt.ULONG),
+        ("usFlags", wt.USHORT),          # 0
+        ("_pad", wt.USHORT),             # 2  对齐填充，别删
+        ("usButtonFlags", wt.USHORT),    # 4
+        ("usButtonData", wt.USHORT),     # 6  滚轮增量（有符号）
+        ("ulRawButtons", wt.ULONG),      # 8
+        ("lLastX", wt.LONG),             # 12
+        ("lLastY", wt.LONG),             # 16
+        ("ulExtraInformation", wt.ULONG),# 20
     ]
 
 
