@@ -1,0 +1,127 @@
+"""边缘触发状态机 —— 从 windows/src/edge_trigger.cpp 移植，逻辑逐条对齐。
+
+核心假设只有一条：光标被钳制在屏幕边缘时，Raw Input 的设备级位移还在继续。
+所以"贴边 + 继续朝外"就是可靠的越界意图信号，不需要真的存在第二块显示器。
+
+两条阈值必须一紧一松：进入要小（用户一推就进），退出要大（否则在边界上抖）。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+
+from .geometry import Rect
+
+# 光标离屏边多少像素内算"贴边"。取 2 是为了容忍高 DPI 下 GetCursorPos 的一像素误差。
+EDGE_BAND_PX = 2
+
+
+class Edge(Enum):
+    Right = "right"
+    Left = "left"
+    Top = "top"
+    Bottom = "bottom"
+
+
+def parse_edge(s: str) -> Edge:
+    table = {
+        "right": Edge.Right, "r": Edge.Right,
+        "left": Edge.Left, "l": Edge.Left,
+        "top": Edge.Top, "t": Edge.Top,
+        "bottom": Edge.Bottom, "b": Edge.Bottom,
+    }
+    try:
+        return table[s.lower()]
+    except KeyError:
+        raise ValueError(f"未知方向 {s!r}，可选 right/left/top/bottom") from None
+
+
+def edge_name(e: Edge) -> str:
+    return e.value
+
+
+@dataclass(frozen=True)
+class EdgeSpec:
+    edge: Edge = Edge.Right
+    screen: Rect = field(default_factory=Rect)
+
+
+def is_at_edge(spec: EdgeSpec, x: int, y: int, band_px: int = EDGE_BAND_PX) -> bool:
+    r = spec.screen
+    if x < r.x or y < r.y or x >= r.right or y >= r.bottom:
+        return False
+    if spec.edge is Edge.Right:
+        return x >= r.right - 1 - band_px
+    if spec.edge is Edge.Left:
+        return x <= r.x + band_px
+    if spec.edge is Edge.Top:
+        return y <= r.y + band_px
+    return y >= r.bottom - 1 - band_px
+
+
+def outward_component(spec: EdgeSpec, dx: int, dy: int) -> int:
+    if spec.edge is Edge.Right:
+        return dx
+    if spec.edge is Edge.Left:
+        return -dx
+    if spec.edge is Edge.Top:
+        return -dy
+    return dy
+
+
+def inward_component(spec: EdgeSpec, dx: int, dy: int) -> int:
+    return -outward_component(spec, dx, dy)
+
+
+@dataclass
+class EdgeTriggerConfig:
+    enter_threshold: int = 12
+    exit_threshold: int = 60
+    decay_per_event: int = 1
+
+
+class Change(Enum):
+    None_ = 0
+    Entered = 1
+    Exited = 2
+
+
+class EdgeTrigger:
+    def __init__(self, cfg: EdgeTriggerConfig | None = None) -> None:
+        self.cfg = cfg or EdgeTriggerConfig()
+        self.active = False
+        self.accum = 0
+
+    def reset(self) -> None:
+        self.active = False
+        self.accum = 0
+
+    def update(self, spec: EdgeSpec, cursor_x: int, cursor_y: int, dx: int, dy: int) -> Change:
+        out = outward_component(spec, dx, dy)
+
+        if not self.active:
+            # 没贴边就不该攒进度：这是"想推出去"和"顺手划到边上"的分界线
+            if not is_at_edge(spec, cursor_x, cursor_y):
+                self.accum = 0
+                return Change.None_
+            if out > 0:
+                self.accum = min(self.accum + out, self.cfg.enter_threshold * 4)
+                if self.accum >= self.cfg.enter_threshold:
+                    self.active = True
+                    self.accum = 0
+                    return Change.Entered
+            else:
+                self.accum = max(0, self.accum - self.cfg.decay_per_event)
+            return Change.None_
+
+        # 捕获中光标位置已不代表意图（可能被我们挪到屏幕中央了），只看位移方向
+        if out < 0:
+            self.accum += -out
+            if self.accum >= self.cfg.exit_threshold:
+                self.active = False
+                self.accum = 0
+                return Change.Exited
+        elif out > 0 and self.accum > 0:
+            # 又往外推：把退出进度吐回去，避免"进去-出来-进去"攒出误退出
+            self.accum = max(0, self.accum - out)
+        return Change.None_
