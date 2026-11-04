@@ -385,7 +385,8 @@ class App:
         self._last_event_t = time.monotonic()
         self._ev_n = 0
         self._ev_t = time.monotonic()
-        self._wheel_acc = 0
+        self._wheel_pending = 0.0
+        self._wheel_t = 0.0
 
     # ---------- 捕获 ----------
 
@@ -396,7 +397,8 @@ class App:
         self.keyboard.active = True
         self.push.reset()
         self._last_event_t = time.monotonic()
-        self._wheel_acc = 0
+        self._wheel_pending = 0.0
+        self._wheel_t = 0.0
         self.kb.clear()
 
         # 落点由"从哪条边进来"决定：入口边就是 iPhone 靠 Windows 的那一侧，
@@ -491,22 +493,32 @@ class App:
 
         self._update_buttons(btn_flags)
 
-    def _on_wheel(self, delta: int) -> None:
-        """滚轮 → Report3 第 4 字节（Wheel，int8）。
+    # 滚轮平滑发送的最小间隔：一次只发 1 档，靠时间摊开。
+    # 取 30ms 而不是更小：BLE 实际投递约 30 报文/秒，发得比这快只会在协议栈里排队，
+    # 表现成"手停了画面还在滚"。
+    WHEEL_MIN_INTERVAL = 0.03
 
-        两个约定要处理：
-          · Windows 的滚轮符号和 HID 相反，这里翻一次；
-          · 一格原始增量是 120，按 --wheel-scale 折算成 HID 档位
-            （1.5 表示一格发 1.5 档，累计余量下次补上，不是简单取整）。
+    def _on_wheel(self, delta: int) -> None:
+        """滚轮只攒不发。
+
+        一格原始增量 120，按 --wheel-scale 折算成小数档位；真正发送交给
+        _wheel_tick，每 12ms 最多 1 档。这样 1.5 档/格不会变成"一次 1 档、
+        一次 2 档"的忽快忽慢，而是均匀地滚。
         """
-        self._wheel_acc += -delta
         step = 120.0 / max(0.1, self.args.wheel_scale)
-        notches = int(self._wheel_acc / step)   # 向零取整，正负都自然
-        print(f"  [wheel] raw={delta:+d}  发={notches:+d}", flush=True)
-        if notches == 0:
+        # Windows 与 HID 的滚轮符号相反，这里翻一次
+        self._wheel_pending += -delta / step
+
+    def _wheel_tick(self) -> None:
+        if not self.shared.capturing or abs(self._wheel_pending) < 1.0:
             return
-        self._wheel_acc -= notches * step
-        self.worker.send_wheel(notches)
+        now = time.monotonic()
+        if now - self._wheel_t < self.WHEEL_MIN_INTERVAL:
+            return
+        self._wheel_t = now
+        one = 1 if self._wheel_pending > 0 else -1
+        self._wheel_pending -= one
+        self.worker.send_wheel(one)
 
     def _move_absolute(self, dx: int, dy: int) -> bool:
         """虚拟坐标累积 + 顶边退出判定。返回 False 表示已经退出捕获。"""
@@ -651,6 +663,7 @@ class App:
         try:
             while self.shared.running:
                 self._drain_keys()
+                self._wheel_tick()
                 now = time.monotonic()
                 if now - self._ev_t >= 5.0:
                     if self.shared.capturing:
