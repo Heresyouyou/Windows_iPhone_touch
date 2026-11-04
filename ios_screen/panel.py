@@ -344,8 +344,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sensitivity", type=float, default=1.0)
     ap.add_argument("--mode", choices=["absolute", "relative"], default="absolute",
                     help="absolute=虚拟绝对坐标(默认，手可无限推)；relative=相对累积")
-    ap.add_argument("--gain", type=float, default=0.5,
-                    help="绝对模式增益：一个鼠标计数换多少 iPhone 像素，默认 0.5")
+    ap.add_argument("--gain", type=float, default=1.0,
+                    help="绝对模式增益：一个鼠标计数换多少 iPhone 像素，默认 1.0")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)

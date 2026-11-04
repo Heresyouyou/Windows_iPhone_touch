@@ -21,3 +21,6 @@ desktop.ini
 build/
 dist/
 *.spec
+
+# 工作区笔记，只留本地
+.workbuddy/

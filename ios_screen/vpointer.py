@@ -26,6 +26,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -60,7 +61,7 @@ class PointerConfig:
 
     width: int = 1180
     height: int = 2556
-    gain: float = 0.5
+    gain: float = 1.0
     accel: float = 0.0
     accel_ref: float = 2500.0
     accel_max: float = 3.0
@@ -92,6 +93,13 @@ class VirtualPointer:
     def set(self, x: float, y: float) -> None:
         self.x = self.clamp_x(x)
         self.y = self.clamp_y(y)
+
+    def set_gain(self, gain: float) -> float:
+        """运行时改增益（热键调速用）。返回实际生效值。"""
+        g = min(8.0, max(0.1, float(gain)))
+        self.cfg = dataclasses.replace(self.cfg, gain=g)
+        self.last_gain = g
+        return g
 
     def center(self) -> None:
         self.set(self.max_x / 2.0, self.max_y / 2.0)

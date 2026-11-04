@@ -89,7 +89,7 @@ python -m ios_screen.app --edge right          # edge mode: push the mouse past 
 | Option | Default | Meaning |
 |---|---|---|
 | `--mode` | `absolute` | virtual absolute coordinates / relative accumulation |
-| `--gain` | `0.5` | absolute mode: iPhone pixels per mouse count |
+| `--gain` | `1.0` | absolute mode: iPhone pixels per mouse count |
 | `--accel` | `0.0` | absolute mode: speed gain, `0` = linear |
 | `--escape-px` | `5` | release back to Windows after pushing this far past the edge |
 | `--calibration` | bundled iPhone 15 Pro curve | relative mode only |
@@ -113,8 +113,9 @@ This build splits the two apart:
   moving back turns negative; at **-5 px** the pointer is released and the Windows
   cursor returns at the edge it left from.
 
-`--gain 0.5` means roughly 2.4 inches of hand travel crosses the whole iPhone;
-raise it for a faster pointer. `Ctrl+Alt+Q` also releases (and quits when idle).
+`--gain 1.0` means roughly 1.2 inches of hand travel (at 1000 DPI) crosses the whole
+iPhone. Tune it live with **Ctrl+Alt+=** / **Ctrl+Alt+-**; `Ctrl+Alt+Q` releases
+(and quits when idle). `--accel 0.8` adds speed-based gain for fast strokes.
 
 ---
 
@@ -291,7 +292,7 @@ python -m ios_screen.app --edge right          # 边缘模式：鼠标推出屏�
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--mode` | `absolute` | `absolute` 虚拟绝对坐标 / `relative` 相对累积 |
-| `--gain` | `0.5` | 绝对模式：一个鼠标计数换多少 iPhone 像素 |
+| `--gain` | `1.0` | 绝对模式：一个鼠标计数换多少 iPhone 像素 |
 | `--accel` | `0.0` | 绝对模式：速度增益，`0` 为线性 |
 | `--escape-px` | `5` | 越过退出边多少像素后释放回 Windows |
 | `--calibration` | 自带 iPhone 15 Pro 曲线 | 仅相对模式使用 |
@@ -313,8 +314,9 @@ python -m ios_screen.app --edge right          # 边缘模式：鼠标推出屏�
 - **退出**：有符号行程计数——进入点记 0，往屏幕深处推为正，往回推为负；
   减到 **-5 像素** 即释放，Windows 光标回到原来出去的那条边上。
 
-`--gain 0.5` 大约手走 2.4 英寸横穿整块 iPhone，想更快就调大。`Ctrl+Alt+Q`
-随时释放（未捕获时是退出程序）。
+`--gain 1.0` 大约手走 1.2 英寸（按 1000 DPI）横穿整块 iPhone。运行时用
+**Ctrl+Alt+=** / **Ctrl+Alt+-** 实时调速，`Ctrl+Alt+Q` 释放（未捕获时退出程序）。
+想要"慢速精细 + 快速跨屏"可以加 `--accel 0.8`。
 
 ---
 

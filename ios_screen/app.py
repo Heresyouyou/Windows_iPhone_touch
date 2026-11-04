@@ -500,6 +500,16 @@ class App:
         else:
             self.shared.running = False
 
+    def speed_up(self) -> None:
+        self._set_gain(self.vp.cfg.gain * 1.25)
+
+    def speed_down(self) -> None:
+        self._set_gain(self.vp.cfg.gain / 1.25)
+
+    def _set_gain(self, g: float) -> None:
+        new = self.vp.set_gain(g)
+        print(f"  ⚡ 增益 {new:.2f} iPhone像素/计数", flush=True)
+
     # ---------- 主循环 ----------
 
     def run(self) -> int:
@@ -536,17 +546,19 @@ class App:
 
         self.win = winput.RawInputWindow(self.on_mouse)
         self.win.create()
-        if not self.win.register_hotkey(
-            winput.MOD_CONTROL | winput.MOD_ALT | winput.MOD_NOREPEAT,
-            winput.VK_Q,
-            self.force_exit,
-        ):
+        mods = winput.MOD_CONTROL | winput.MOD_ALT | winput.MOD_NOREPEAT
+        if not self.win.register_hotkey(mods, winput.VK_Q, self.force_exit):
             print("⚠️ 全局热键 Ctrl+Alt+Q 注册失败（可能被别的程序占用），"
                   "退出捕获请改用反向推出。")
+        fast_ok = self.win.register_hotkey(mods, winput.VK_OEM_PLUS, self.speed_up)
+        slow_ok = self.win.register_hotkey(mods, winput.VK_OEM_MINUS, self.speed_down)
+        if not (fast_ok and slow_ok):
+            print("⚠️ Ctrl+Alt+= / Ctrl+Alt+- 调速热键注册失败，只能靠 --gain 启动参数。")
         self.swallower.install()
 
         print("\n就绪。鼠标推向屏幕%s缘即接管 iPhone，落点在对侧 iPhone 的%s边（记为 0）；"
-              "往回推越过该边 %.0fpx 即释放回 Windows。Ctrl+Alt+Q 也可退出。\n"
+              "往回推越过该边 %.0fpx 即释放回 Windows。\n"
+              "      Ctrl+Alt+= 加快 / Ctrl+Alt+- 放慢 / Ctrl+Alt+Q 释放（空闲时退出）。\n"
               % (_EDGE_CN[self.edge.edge], _SIDE_CN[self.exit_side], self.push.threshold))
 
         try:
@@ -619,8 +631,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mode", choices=["absolute", "relative"], default="absolute",
                     help="absolute=虚拟绝对坐标(默认，无累积延迟，手可无限推)；"
                          "relative=相对累积(需校准曲线，30ms 一步)")
-    ap.add_argument("--gain", type=float, default=0.5,
-                    help="绝对模式增益：一个鼠标计数换多少 iPhone 像素，默认 0.5")
+    ap.add_argument("--gain", type=float, default=1.0,
+                    help="绝对模式增益：一个鼠标计数换多少 iPhone 像素，默认 1.0")
     ap.add_argument("--accel", type=float, default=0.0,
                     help="绝对模式速度增益，0=线性(默认)，0.5~1 快划时放大行程")
     ap.add_argument("--escape-px", type=float, default=5.0,

@@ -56,6 +56,8 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 VK_Q = 0x51
+VK_OEM_PLUS = 0xBB     # 主键盘 =/+，RegisterHotKey 不区分 Shift
+VK_OEM_MINUS = 0xBD    # 主键盘 -/_
 
 RID_INPUT = 0x10000003
 RIDEV_INPUTSINK = 0x00000100
@@ -306,7 +308,7 @@ class RawInputWindow:
         self._wndproc_ref = WNDPROC(self._wndproc)
         self.hwnd = None
         self._msg = wt.MSG()
-        self._hotkey: tuple[int, object] | None = None
+        self._hotkeys: dict[int, tuple[int, int, object]] = {}
 
     def create(self) -> None:
         hinst = kernel32.GetModuleHandleW(None)
@@ -335,8 +337,9 @@ class RawInputWindow:
             return 0
         if msg == WM_HOTKEY:
             try:
-                if self._hotkey:
-                    self._hotkey[1]()
+                hk = self._hotkeys.get(int(wparam))
+                if hk:
+                    hk[2]()
             except Exception:
                 pass
             return 0
@@ -350,18 +353,21 @@ class RawInputWindow:
 
     def register_hotkey(self, mods: int, vk: int, callback) -> bool:
         """注册全局热键。捕获期间鼠标被吞、光标不动，热键是唯一的兜底出口。"""
-        if self._hotkey:
-            self.unregister_hotkey()
+        for m, v, _cb in self._hotkeys.values():
+            if m == mods and v == vk:
+                return True
         kid = 1
+        while kid in self._hotkeys:
+            kid += 1
         if not user32.RegisterHotKey(self.hwnd, kid, mods, vk):
             return False
-        self._hotkey = (kid, callback)
+        self._hotkeys[kid] = (mods, vk, callback)
         return True
 
-    def unregister_hotkey(self) -> None:
-        if self._hotkey:
-            user32.UnregisterHotKey(self.hwnd, self._hotkey[0])
-            self._hotkey = None
+    def unregister_hotkeys(self) -> None:
+        for kid in list(self._hotkeys):
+            user32.UnregisterHotKey(self.hwnd, kid)
+        self._hotkeys.clear()
 
     def _handle_raw(self, hraw) -> None:
         size = wt.UINT(0)
@@ -395,7 +401,7 @@ class RawInputWindow:
         return True
 
     def destroy(self) -> None:
-        self.unregister_hotkey()
+        self.unregister_hotkeys()
         if self.hwnd:
             user32.DestroyWindow(self.hwnd)
             self.hwnd = None
