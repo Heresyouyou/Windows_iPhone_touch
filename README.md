@@ -138,6 +138,20 @@ This build splits the two apart:
 iPhone. Tune it live with **Ctrl+Alt+=** / **Ctrl+Alt+-**; `Ctrl+Alt+Q` releases
 (and quits when idle). `--accel 0.8` adds speed-based gain for fast strokes.
 
+### Personal config (kept out of the repo)
+
+`user_config.json` in the project root is git-ignored. Put machine-specific
+preferences there instead of patching the code:
+
+```json
+{ "key_remap": { "CapsLock": "Esc" } }
+```
+
+`key_remap` applies only while the mouse is captured and only to keys you list;
+everything else reaches the iPhone unchanged. Supported names: letters, digits,
+`Tab` `CapsLock` `Esc` `Enter` `Space` `Backspace` `Up/Down/Left/Right`
+`Home` `End` `PageUp` `PageDown` `Insert` `Delete` `Shift` `Ctrl` `Alt` `Win` `F1..F12`.
+
 ---
 
 ## Architecture
@@ -358,6 +372,19 @@ python -m ios_screen.app --edge bottom --zone-start 0.45 --zone-end 0.55
 `--gain 1.0` 大约手走 1.2 英寸（按 1000 DPI）横穿整块 iPhone。运行时用
 **Ctrl+Alt+=** / **Ctrl+Alt+-** 实时调速，`Ctrl+Alt+Q` 释放（未捕获时退出程序）。
 想要"慢速精细 + 快速跨屏"可以加 `--accel 0.8`。
+
+### 个性化配置（不进版本库）
+
+项目根目录的 `user_config.json` 已被 git 忽略，本机专属的偏好放这里，不要去改代码：
+
+```json
+{ "key_remap": { "CapsLock": "Esc" } }
+```
+
+`key_remap` 只在捕获期间生效，且只影响你列出的键，其余按键原样转发。
+可用键名：字母、数字、`Tab` `CapsLock` `Esc` `Enter` `Space` `Backspace`
+`Up/Down/Left/Right` `Home` `End` `PageUp` `PageDown` `Insert` `Delete`
+`Shift` `Ctrl` `Alt` `Win` `F1..F12`。
 
 ---
 

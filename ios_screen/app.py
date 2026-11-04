@@ -29,7 +29,7 @@ from .geometry import Rect
 from .hogp import HogpService
 from .keymap import KeyboardState
 from .vpointer import PointerConfig, PushThrough, VirtualPointer
-from . import winput
+from . import userconfig, winput
 
 # 边缘方向的中文名，只用于启动提示
 _EDGE_CN = {Edge.Right: "右", Edge.Left: "左", Edge.Top: "上", Edge.Bottom: "下"}
@@ -53,13 +53,6 @@ ENTRY_SIDE = {
     Edge.Left: "right",
     Edge.Top: "bottom",
     Edge.Bottom: "top",
-}
-
-# 捕获期间的按键重映射（虚拟键码）：给盲控留两个方向键的手感。
-# Tab → ↑，CapsLock → ↓。只在转发给 iPhone 时生效，Windows 本地不受影响。
-KEY_REMAP = {
-    0x09: 0x26,   # Tab      → VK_UP
-    0x14: 0x28,   # CapsLock → VK_DOWN
 }
 
 
@@ -361,6 +354,8 @@ class App:
         self.swallower = winput.MouseSwallower()
         self.keyboard = winput.KeyboardForwarder()
         self.kb = KeyboardState()
+        # 个性化按键映射只来自本地 user_config.json，标准版本里没有默认映射
+        self.key_remap = userconfig.key_remap(args.config)
         self.win: winput.RawInputWindow | None = None
 
         mon = winput.pick_monitor(args.screen)
@@ -578,7 +573,7 @@ class App:
             vk, down = self.keyboard.events.popleft()
             if not self.shared.capturing:
                 continue
-            vk = KEY_REMAP.get(vk, vk)
+            vk = self.key_remap.get(vk, vk)
             changed = self.kb.press(vk) if down else self.kb.release(vk)
             if changed:
                 self.worker.send_report(hid.RID_KEYBOARD, self.kb.report())
@@ -620,6 +615,8 @@ class App:
         print(f"边缘 : {edge_name(self.edge.edge)}  "
               f"触发区 {self.edge.zone_start * 100:.0f}%-{self.edge.zone_end * 100:.0f}%  "
               f"进入阈值 {self.trigger.cfg.enter_threshold} 计数")
+        if self.key_remap:
+            print(f"配置 : 已加载 {len(self.key_remap)} 项按键映射（user_config.json）")
         if self.mode == "absolute":
             print(f"模式 : absolute  增益 {self.args.gain:.2f} iPhone像素/计数  "
                   f"顶边 {self.exit_side} 越过 {self.push.threshold:.0f}px 即释放")
@@ -628,8 +625,7 @@ class App:
                   f"（灵敏度 {self.args.sensitivity}）")
         if self.args.dry_run:
             print("模式 : dry-run，报文只打印不发蓝牙")
-        else:
-            # 广播是异步起的，直接取会打印成 False，看着像失败
+        else:            # 广播是异步起的，直接取会打印成 False，看着像失败
             t0 = time.monotonic()
             while not self.svc.advertising and time.monotonic() - t0 < 2.0:
                 time.sleep(0.05)
@@ -731,6 +727,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--screen", default="primary",
                     help="目标显示器：primary / 序号 / 设备名片段，默认 primary")
     ap.add_argument("--list", action="store_true", help="列出所有显示器后退出")
+    ap.add_argument("--config", default=None,
+                    help="用户个性化配置 json，默认项目根目录的 user_config.json")
     ap.add_argument("--calibration", default=CAL_DEFAULT, help="校准 json")
     ap.add_argument("--mode", choices=["absolute", "relative"], default="absolute",
                     help="absolute=虚拟绝对坐标(默认，无累积延迟，手可无限推)；"
