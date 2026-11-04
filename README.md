@@ -3,7 +3,7 @@
 鼠标在窗口里移动，iPhone 上的指针跟着动；点击、长按、拖动、键盘输入全部可用。
 **不插 USB、不装虚拟显示驱动、iPhone 上不装任何 App、不需要越狱。**
 
-这是 `deskflow-ios/IOS端/` 那份 macOS 版（iPhone Use）在 Windows 上的重写。
+这是 macOS 版 iPhone Use 的 Windows 重写。
 
 ---
 
@@ -122,10 +122,11 @@ macOS 版有四层（采集 / 虚拟屏 / 窗口 / 注入），Windows 版砍掉
 ## 目录
 
 ```
-ios-screen-win/
+.
 ├── ios_screen/
-│   ├── hid.py            198 字节 Report Map（从 C++ 源码解析，不手抄）+ 报文编码
-│   ├── calibration.py    32 档加速度曲线（相对模式用）
+│   ├── data/calibration-iphone15pro.json   真机校准曲线（相对模式用）
+│   ├── hid.py            198 字节 Report Map 常量 + 报文编码
+│   ├── calibration.py    32 档加速度曲线解析与单步跟踪
 │   ├── edge_trigger.py   边缘状态机（纯逻辑，单测覆盖）
 │   ├── geometry.py       Rect
 │   ├── keymap.py         VK → HID Usage 映射 + 按键状态机
@@ -168,4 +169,4 @@ python -m unittest discover -s tests -v
 
 ## 许可
 
-代码部分随 `deskflow-ios/` 保持一致。Report Map 与校准曲线数据来自 iPhone Use（MIT）。
+Report Map 与校准曲线数据来自 [iPhone Use](https://github.com/YueChen-C/iPhone-use)（MIT）。

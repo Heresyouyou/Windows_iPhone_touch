@@ -28,8 +28,8 @@ from ios_screen.geometry import Rect  # noqa: E402
 
 SCREEN = Rect(0, 0, 3440, 1440)
 CAL_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "deskflow-ios", "IOS端", "windows", "calibration-iphone15pro.json",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "ios_screen", "data", "calibration-iphone15pro.json",
 )
 
 

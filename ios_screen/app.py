@@ -30,11 +30,10 @@ from . import winput
 # 边缘方向的中文名，只用于启动提示
 _EDGE_CN = {Edge.Right: "右", Edge.Left: "左", Edge.Top: "上", Edge.Bottom: "下"}
 
-CAL_DEFAULT = os.path.normpath(
-    os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "..", "..", "deskflow-ios", "IOS端", "windows", "calibration-iphone15pro.json",
-    )
+CAL_DEFAULT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "data",
+    "calibration-iphone15pro.json",
 )
 
 SEND_INTERVAL = 0.03

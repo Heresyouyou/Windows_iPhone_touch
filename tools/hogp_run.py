@@ -24,8 +24,7 @@ from ios_screen.hogp import HogpService  # noqa: E402
 
 CAL_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "..",
-    "deskflow-ios", "IOS端", "windows", "calibration-iphone15pro.json",
+    "ios_screen", "data", "calibration-iphone15pro.json",
 )
 
 

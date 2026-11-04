@@ -107,7 +107,7 @@ class HogpService:
         await self._add(svc, C_HID_INFO, Props.READ, bytes([0x11, 0x01, 0x00, 0x02]),
                         name="HIDInfo")
         # 2. Report Map —— 198 字节，从 C++ 源码解析，保证与上游逐字节一致
-        await self._add(svc, C_REPORT_MAP, Props.READ, hid.load_report_map(),
+        await self._add(svc, C_REPORT_MAP, Props.READ, hid.REPORT_MAP,
                         name="ReportMap")
         # 3. HID Control Point
         await self._add(
