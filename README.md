@@ -537,6 +537,31 @@ tail -f ~/Library/Logs/MacPhoneTouch.log
 > 不要先在「设置 → 蓝牙」里配对。这条链路必须由辅助触控持有；被系统蓝牙层抢走的话，
 > 辅助触控会一直转圈。
 
+### 跟着 Deskflow 启停（可选）
+
+如果这台 Mac 是被 Deskflow 当副屏用，可以让本程序完全跟着它的生命周期走：
+
+```bash
+tools/guard_ctl.sh install     # 装成 LaunchAgent，登录即生效
+tools/guard_ctl.sh status      # 守护 / 本体 / Deskflow 三方状态
+tools/guard_ctl.sh uninstall   # 卸载，并把本体一起收掉
+```
+
+装好之后：
+
+- Deskflow 启动（准确说是从「没在跑」变成「在跑」）→ 拉起本程序，虚拟屏随之出现；
+- Deskflow 退出 → 收掉本程序，虚拟屏立刻消失，不会给桌面留一块黑洞；
+- 你自己按 `Ctrl+Option+Q` 关掉 → **守护不会把你重新拉起来**。
+
+最后一条是刻意的：守护只在状态**变化**的那一刻动手，不做「保证进程在跑」的看门狗。
+否则用户想临时关一下就关不掉，比没人守还烦。
+
+判据是 `Deskflow.app/Contents/MacOS/Deskflow` 这个 GUI 进程，不是 `deskflow-core`——
+退出应用时 core 可能还残留一小会儿，拿它当判据会晚关甚至不关。
+
+> 如果 `install` 报 `launchd 拒绝了注册`，说明当前进程没有写用户 domain 的权限
+> （在 IDE / Agent 的沙箱里很常见）。在你自己的终端里跑同一条命令即可。
+
 ---
 
 ## 两种模式，任选其一
