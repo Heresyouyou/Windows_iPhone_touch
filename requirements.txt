@@ -1,0 +1,9 @@
+# macOS 版只需要 PyObjC 的四个框架包。
+#
+# CoreBluetooth 用的是 CBPeripheralManager（外设角色）；
+# Quartz 提供 CGEventTap（鼠标/键盘事件）和 CGDisplay（显示器枚举）；
+# Cocoa 提供 AppKit / CoreFoundation 的运行循环与面板窗口。
+pyobjc-core>=10.0
+pyobjc-framework-Cocoa>=10.0
+pyobjc-framework-Quartz>=10.0
+pyobjc-framework-CoreBluetooth>=10.0
