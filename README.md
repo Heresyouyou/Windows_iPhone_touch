@@ -79,9 +79,29 @@ pip install winrt-runtime winrt-Windows.Devices.Bluetooth \
 ### Run
 
 ```bash
-python -m ios_screen.panel                    # window mode (recommended, absolute coordinates)
-python -m ios_screen.panel --mode relative     # relative mode (uses calibration curve)
-python -m ios_screen.app --edge right          # edge mode: push the mouse past the screen edge
+python -m ios_screen.app                       # edge mode, phone on the right (default)
+python -m ios_screen.app --mode relative       # same, using the calibration curve
+python -m ios_screen.panel                     # window mode, for debugging
+```
+
+### Two modes, pick one
+
+| | `absolute` (default) | `relative` |
+|---|---|---|
+| Positioning | one absolute report per change; virtual coordinate, unlimited hand travel | calibration curve, one step per 30 ms |
+| Latency | none — one report lands where you point | up to ~200 ms to cross the screen |
+| Needs calibration | no | yes (`--calibration`) |
+| Exit | push back past the entry edge by `--escape-px` | push back `--exit-threshold` counts |
+| Best for | everyday use | devices that ignore absolute reports |
+
+Default geometry: the phone sits to the **right** of the monitor, so the trigger is the
+monitor's right edge and the decision is made on **X** (cursor at `right-1`, still moving
+right). Entry lands on the iPhone's left edge; pushing back left across it releases.
+
+Phone below the screen instead:
+
+```bash
+python -m ios_screen.app --edge bottom --zone-start 0.45 --zone-end 0.55
 ```
 
 ### Options
@@ -283,9 +303,28 @@ pip install winrt-runtime winrt-Windows.Devices.Bluetooth \
 ### 运行
 
 ```bash
-python -m ios_screen.panel                     # 窗口模式（推荐，绝对坐标）
-python -m ios_screen.panel --mode relative     # 相对模式（走校准曲线）
-python -m ios_screen.app --edge right          # 边缘模式：鼠标推出屏幕边缘即接管
+python -m ios_screen.app                       # 边缘模式，手机在右侧（默认）
+python -m ios_screen.app --mode relative       # 同上，走校准曲线
+python -m ios_screen.panel                     # 窗口模式，调试用
+```
+
+### 两种模式，任选其一
+
+| | `absolute`（默认） | `relative` |
+|---|---|---|
+| 定位方式 | 每次变化发一条绝对报文；虚拟坐标，手可无限推 | 校准曲线，30ms 走一步 |
+| 延迟 | 无——一条报文直接落点 | 横穿整屏最多约 200ms |
+| 需要校准 | 不需要 | 需要（`--calibration`） |
+| 退出 | 往回推越过进入边 `--escape-px` 像素 | 往回推 `--exit-threshold` 个计数 |
+| 适用 | 日常使用 | 不认绝对报文的设备 |
+
+默认几何：手机在显示器**右侧**，所以触发边是显示器右缘，判定看 **横坐标**
+（光标到 `right-1` 且继续向右）。进入后落在 iPhone 左缘，向左推回去即释放。
+
+想把手机放在屏幕下方：
+
+```bash
+python -m ios_screen.app --edge bottom --zone-start 0.45 --zone-end 0.55
 ```
 
 ### 参数
