@@ -92,7 +92,7 @@ python -m ios_screen.app --edge right          # edge mode: push the mouse past 
 | `--gain` | `1.0` | absolute mode: iPhone pixels per mouse count |
 | `--accel` | `0.0` | absolute mode: speed gain, `0` = linear |
 | `--escape-px` | `5` | release back to Windows after pushing this far past the edge |
-| `--wheel-scale` | `1.5` | scroll wheel speed: HID detents per wheel notch |
+| `--wheel-step` | `2` | HID detents per wheel notch (integer) |
 | `--calibration` | bundled iPhone 15 Pro curve | relative mode only |
 | `--sensitivity` | `1.0` | relative-mode movement multiplier |
 | `--edge` | `right` | edge-mode direction |
@@ -296,7 +296,7 @@ python -m ios_screen.app --edge right          # 边缘模式：鼠标推出屏�
 | `--gain` | `1.0` | 绝对模式：一个鼠标计数换多少 iPhone 像素 |
 | `--accel` | `0.0` | 绝对模式：速度增益，`0` 为线性 |
 | `--escape-px` | `5` | 越过退出边多少像素后释放回 Windows |
-| `--wheel-scale` | `1.5` | 滚轮速度：一格滚轮发多少 HID 档位 |
+| `--wheel-step` | `2` | 每格滚轮发多少 HID 档位（整数） |
 | `--calibration` | 自带 iPhone 15 Pro 曲线 | 仅相对模式使用 |
 | `--sensitivity` | `1.0` | 相对模式的位移倍率 |
 | `--edge` | `right` | 边缘模式的方向 |

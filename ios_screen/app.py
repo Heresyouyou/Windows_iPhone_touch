@@ -385,8 +385,7 @@ class App:
         self._last_event_t = time.monotonic()
         self._ev_n = 0
         self._ev_t = time.monotonic()
-        self._wheel_pending = 0.0
-        self._wheel_t = 0.0
+        self._wheel_acc = 0.0
 
     # ---------- 捕获 ----------
 
@@ -397,8 +396,7 @@ class App:
         self.keyboard.active = True
         self.push.reset()
         self._last_event_t = time.monotonic()
-        self._wheel_pending = 0.0
-        self._wheel_t = 0.0
+        self._wheel_acc = 0.0
         self.kb.clear()
 
         # 落点由"从哪条边进来"决定：入口边就是 iPhone 靠 Windows 的那一侧，
@@ -493,32 +491,20 @@ class App:
 
         self._update_buttons(btn_flags)
 
-    # 滚轮平滑发送的最小间隔：一次只发 1 档，靠时间摊开。
-    # 取 30ms 而不是更小：BLE 实际投递约 30 报文/秒，发得比这快只会在协议栈里排队，
-    # 表现成"手停了画面还在滚"。
-    WHEEL_MIN_INTERVAL = 0.03
-
     def _on_wheel(self, delta: int) -> None:
-        """滚轮只攒不发。
+        """每格滚轮固定发 N 档（N = --wheel-step），一条报文发完。
 
-        一格原始增量 120，按 --wheel-scale 折算成小数档位；真正发送交给
-        _wheel_tick，每 12ms 最多 1 档。这样 1.5 档/格不会变成"一次 1 档、
-        一次 2 档"的忽快忽慢，而是均匀地滚。
+        不再做"1.5 档摊成两条"的平滑：那会把一格拆成 1 档 + 1 档，节奏上看就是
+        走两下。这里让每格的量恒定且一次性发完，节奏就跟着滚轮本身走。
+
+        少数高分辨率滚轮一格不是 120，先把小数格攒起来再折算，避免半格被丢掉。
         """
-        step = 120.0 / max(0.1, self.args.wheel_scale)
-        # Windows 与 HID 的滚轮符号相反，这里翻一次
-        self._wheel_pending += -delta / step
-
-    def _wheel_tick(self) -> None:
-        if not self.shared.capturing or abs(self._wheel_pending) < 1.0:
+        self._wheel_acc += -delta / 120.0        # Windows 与 HID 方向相反，翻一次
+        notches = int(self._wheel_acc)           # 向零截断
+        if notches == 0:
             return
-        now = time.monotonic()
-        if now - self._wheel_t < self.WHEEL_MIN_INTERVAL:
-            return
-        self._wheel_t = now
-        one = 1 if self._wheel_pending > 0 else -1
-        self._wheel_pending -= one
-        self.worker.send_wheel(one)
+        self._wheel_acc -= notches
+        self.worker.send_wheel(notches * self.args.wheel_step)
 
     def _move_absolute(self, dx: int, dy: int) -> bool:
         """虚拟坐标累积 + 顶边退出判定。返回 False 表示已经退出捕获。"""
@@ -663,7 +649,6 @@ class App:
         try:
             while self.shared.running:
                 self._drain_keys()
-                self._wheel_tick()
                 now = time.monotonic()
                 if now - self._ev_t >= 5.0:
                     if self.shared.capturing:
@@ -748,8 +733,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="绝对模式速度增益，0=线性(默认)，0.5~1 快划时放大行程")
     ap.add_argument("--escape-px", type=float, default=5.0,
                     help="越过退出边多少像素就释放回 Windows，默认 5")
-    ap.add_argument("--wheel-scale", type=float, default=1.5,
-                    help="滚轮速度：一格滚轮发多少 HID 档位，默认 1.5")
+    ap.add_argument("--wheel-step", type=int, default=2,
+                    help="每格滚轮发多少 HID 档位（整数），默认 2")
     ap.add_argument("--sensitivity", type=float, default=1.0, help="相对模式灵敏度倍数，默认 1.0")
     ap.add_argument("--enter-threshold", type=int, default=12, help="进入捕获所需朝外计数")
     ap.add_argument("--exit-threshold", type=int, default=60,
