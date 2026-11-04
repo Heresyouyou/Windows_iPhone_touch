@@ -52,13 +52,23 @@ class EdgeSpec:
 
 def is_at_edge(spec: EdgeSpec, x: int, y: int, band_px: int = EDGE_BAND_PX) -> bool:
     r = spec.screen
-    if x < r.x or y < r.y or x >= r.right or y >= r.bottom:
+    # 右/下边界必须用 `>` 而不是 `>=`。
+    #
+    # Windows 的 GetCursorPos 在光标顶满右下角时最大只到 width-1 / height-1；
+    # macOS 的 CGEventGetLocation 不是这样——光标顶住右缘时它返回的正是
+    # right 本身（1680），底缘是 bottom 本身（1050）。用 `>=` 判"是否在屏外"，
+    # 就会把"正贴着边"误判成"已经跑到屏幕外面"，贴边条件永远不成立。
+    # 实测症状：光标 (1680.0, y) 而 is_at_edge 返回 False，于是推不进去。
+    if x < r.x or y < r.y or x > r.right or y > r.bottom:
         return False
-    # 沿边方向的归一化位置：左右边看 y，上下边看 x
+    # 沿边方向的归一化位置：左右边看 y，上下边看 x。
+    # 同样因为能取到 right/bottom，along 会算出 1.0009 这种略大于 1 的值，
+    # 不夹紧就会被触发区间的上界挡掉（屏幕最下方那一截右缘失效）。
     if spec.edge in (Edge.Right, Edge.Left):
         along = (y - r.y) / max(1, r.h - 1)
     else:
         along = (x - r.x) / max(1, r.w - 1)
+    along = max(0.0, min(1.0, along))
     if not (spec.zone_start <= along <= spec.zone_end):
         return False
     if spec.edge is Edge.Right:

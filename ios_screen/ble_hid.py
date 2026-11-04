@@ -177,7 +177,9 @@ class HidPeripheral:
         self._advertising = False
         self._advertised_error = None
         self._subscribed = False
-        self._on_subscribe = None
+        # 注意别叫 self._on_subscribe：那会遮盖同名方法 _on_subscribe()，
+        # 订阅回调触发时就变成「调用 None」，整个进程被 ObjC 异常带走。
+        self._subscribe_cb = None
         self._sub_count = 0
 
     # ------------------------------------------------------------ 生命周期
@@ -252,7 +254,7 @@ class HidPeripheral:
         return " ".join(parts) or "无"
 
     def on_subscribe_changed(self, cb) -> None:
-        self._on_subscribe = cb
+        self._subscribe_cb = cb
 
     # ------------------------------------------------------------ 发布流程
 
@@ -390,6 +392,14 @@ class HidPeripheral:
 
     def _on_read(self, manager, request) -> None:
         char = request.characteristic()
+        if self.verbose:
+            # 主机连上来第一件事就是读 HID Information / Report Map，
+            # 所以这条日志能区分「根本没连上」和「连上了但没订阅」。
+            print(
+                f"  [ble] ← 读 {char.UUID().UUIDString()[:8]} "
+                f"from {request.central().identifier().UUIDString()[:8]}",
+                flush=True,
+            )
         value = self._read_value(char)
         if value is None:
             manager.respondToRequest_withResult_(request, CB.CBATTErrorAttributeNotFound)
@@ -420,6 +430,13 @@ class HidPeripheral:
             if first is None:
                 first = req
             char = req.characteristic()
+            if self.verbose:
+                print(
+                    f"  [ble] → 写 {char.UUID().UUIDString()[:8]} "
+                    f"{len(_bytes(req.value()))}B "
+                    f"from {req.central().identifier().UUIDString()[:8]}",
+                    flush=True,
+                )
             if char is self._control_point:
                 # 控制点写入但没有任何输入订阅 = 主机拿着旧的 GATT 缓存。
                 # 用 Service Changed 让它重新发现服务，否则它会一直转圈。
@@ -449,8 +466,8 @@ class HidPeripheral:
         if now != self._subscribed:
             self._subscribed = now
             print(f"  [ble] >>> 总订阅状态 {now}", flush=True)
-            if self._on_subscribe:
-                self._on_subscribe(now)
+            if self._subscribe_cb:
+                self._subscribe_cb(now)
 
     def _has_input_subscriber(self) -> bool:
         """有没有主机在监听输入报表。只有输入报表算数——订阅电量不代表能用。"""

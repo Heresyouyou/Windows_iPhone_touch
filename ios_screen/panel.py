@@ -193,7 +193,7 @@ class PanelApp(Controller):
 
     def warp_after_exit(self) -> None:
         # 放到面板左侧外面，避免下一次点击/移动立刻又抓住
-        mac_input.warp_cursor(self.region.x - 60, self.region.y + self.region.h / 2.0)
+        self.request_warp(self.region.x - 60, self.region.y + self.region.h / 2.0)
 
     # ------------------------------------------------------------ 窗口
 
@@ -301,6 +301,8 @@ class PanelApp(Controller):
         return 0
 
     def _on_timer(self, timer=None) -> None:
+        # 光标动作只能在定时器里落地，事件回调里调系统 API 会被忽略
+        self.maintain_cursor()
         if self.capturing:
             self.sender.tick(self.target_x, self.target_y, self.buttons)
 
@@ -345,7 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", default=None)
     ap.add_argument("--sensitivity", type=float, default=1.0)
     ap.add_argument("--mode", choices=["absolute", "relative"], default="absolute")
-    ap.add_argument("--gain", type=float, default=1.0)
+    ap.add_argument("--gain", type=float, default=3.0,
+                    help="一个鼠标计数换多少 iPhone 像素，默认 3.0")
     ap.add_argument("--accel", type=float, default=0.0)
     ap.add_argument("--escape-px", type=float, default=5.0)
     ap.add_argument("--wheel-step", type=int, default=2)

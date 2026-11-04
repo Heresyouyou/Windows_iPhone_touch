@@ -173,5 +173,27 @@ class TestOtherServices(unittest.TestCase):
         self.assertIn(gt.C_PNP_ID, names)
 
 
+class TestNoShadowedCallbacks(unittest.TestCase):
+    """实例属性不能盖住同名方法。
+
+    这不是洁癖：PyObjC 把 Python 异常转成 ObjC 异常，未捕获时整个进程
+    被 `terminating due to uncaught exception` 带走，日志里只有一句
+    `'NoneType' object is not callable` 和一堆 C 栈，根本看不出是哪一行。
+    真实踩过：`self._on_subscribe = None` 盖住了 `_on_subscribe()` 方法，
+    iPhone 一订阅就崩。
+    """
+
+    def test_instance_attributes_do_not_shadow_methods(self):
+        from ios_screen import ble_hid
+
+        obj = ble_hid.HidPeripheral()          # 构造不碰蓝牙，安全
+        clashes = [
+            name
+            for name in vars(obj)
+            if callable(getattr(type(obj), name, None))
+        ]
+        self.assertEqual(clashes, [], f"实例属性盖住了同名方法: {clashes}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

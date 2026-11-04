@@ -263,7 +263,7 @@ class Controller:
         sender: Sender,
         *,
         mode: str = "absolute",
-        gain: float = 1.0,
+        gain: float = 3.0,
         accel: float = 0.0,
         escape_px: float = 5.0,
         wheel_step: int = 2,
@@ -304,9 +304,20 @@ class Controller:
         self.cursor = mac_input.CursorGuard()
         self._wheel_acc = 0.0
         self._last_event_t = time.monotonic()
+        self._dbg_t = time.monotonic()
+        self._dbg_n = 0
+        self._dbg_dx = 0
+        self._dbg_dy = 0
         self._caps_on = False
         self.anchor = (float(screen_w) / 2, float(screen_h) / 2)
         self.on_state_change = None      # (capturing: bool) -> None，给 UI 用
+        self.dbg_extra = None            # () -> str，诊断用，由入口程序注入
+
+        # 光标动作一律记账，由 maintain_cursor() 在定时器里落地。
+        # 只有"退出后挪到内侧"这一种请求，没有任何常驻状态。
+        self._pending_warp: tuple[float, float] | None = None
+        self._warp_count = 0
+        self._warp_after = (0.0, 0.0)     # 最近一次归位的目标点
 
     # ------------------------------------------------------------ 子类钩子
 
@@ -338,7 +349,6 @@ class Controller:
         self.target_x, self.target_y = tx, ty
         self.sender.jump_to(tx, ty)
         self.sender.invalidate_absolute()
-        mac_input.warp_cursor(*self.anchor)
         if self.on_state_change:
             self.on_state_change(True)
         if self.verbose:
@@ -365,6 +375,9 @@ class Controller:
             self.sender.send_report(hid.RID_KEYBOARD, self.kb.report())
         self.cursor.show()
         self.push.reset()
+        # 只挪一次光标（放到不会立刻再次触发的内侧位置）。
+        # 绝不改"光标与鼠标的关联"：那是系统级开关，漏恢复一次，
+        # 整台机器的指针就不再跟随鼠标，用户只能重启。
         self.warp_after_exit()
         if self.on_state_change:
             self.on_state_change(False)
@@ -387,13 +400,33 @@ class Controller:
             self._move_absolute(dx, dy)
         else:
             self._move_relative(dx, dy)
-        self.keep_anchor()
         return self.capturing
 
     def _move_absolute(self, dx: int, dy: int) -> bool:
         now = time.monotonic()
         dt = min(0.1, max(1e-4, now - self._last_event_t))
         self._last_event_t = now
+
+        # 诊断：确认「事件给到的增量」与「物理光标实际位置」。
+        # 光标贴在屏幕边上时 macOS 会把该方向的增量压成 0——这正是
+        # 「iPhone 上指针只在左缘上下走」的直接原因，先量出来再改。
+        if self.verbose:
+            self._dbg_n += 1
+            self._dbg_dx += dx
+            self._dbg_dy += dy
+            if now - self._dbg_t >= 1.0:
+                cx, cy = mac_input.cursor_pos()
+                extra = self.dbg_extra() if self.dbg_extra else ""
+                print(
+                    f"  [dbg] {self._dbg_n} 事件 dx={self._dbg_dx} dy={self._dbg_dy} "
+                    f"vp=({self.vp.x:.0f},{self.vp.y:.0f}) 光标=({cx:.0f},{cy:.0f}) "
+                    f"锚点=({self.anchor[0]:.0f},{self.anchor[1]:.0f}){extra}",
+                    flush=True,
+                )
+                self._dbg_t = now
+                self._dbg_n = 0
+                self._dbg_dx = 0
+                self._dbg_dy = 0
 
         applied = self.vp.move(dx, dy, dt)
         # 有符号行程：进入点 = 0，往外为负；负到 escape_px 就释放回 Mac
@@ -414,16 +447,36 @@ class Controller:
             min(float(self.cal.screen_height - 1), self.target_y + dy * self.px_per_count),
         )
 
-    def keep_anchor(self) -> None:
-        """把光标钉在锚点上。
+    # ------------------------------------------------------------ 光标
 
-        HID 层 tap 吞掉事件后光标本来就不会动，这里只是兜底：如果 tap 退化成了
-        只监听模式，就靠"偏离就拉回"来保证手可以无限推。
+    def request_warp(self, x: float, y: float) -> None:
+        """登记一次光标移动。真正的系统调用在 maintain_cursor() 里做。"""
+        self._pending_warp = (float(x), float(y))
+
+    def maintain_cursor(self) -> None:
+        """光标状态的唯一落地执行点。必须从 run loop 的定时器调用。
+
+        `CGWarpMouseCursorPosition` 是每次都要显式发起的单次动作，没有常驻状态，
+        所以这里只处理"点一下"的请求。**不做伺服，也不碰光标关联**：
+
+        早期版本在捕获期间把光标解耦（CGAssociateMouseAndMouseCursorPosition）
+        并每 10ms 把它钉在屏幕中央。那是系统级状态，进程一旦没恢复成功，
+        整台机器的鼠标就再也回不到自己屏幕上——必须重启。
+        位移现在来自 IOHIDManager 的设备原始报文，跟光标在哪毫无关系，
+        因此不需要、也不应该再动光标。
         """
-        cx, cy = mac_input.cursor_pos()
-        ax, ay = self.anchor
-        if abs(cx - ax) > 4 or abs(cy - ay) > 4:
-            mac_input.warp_cursor(ax, ay)
+        if self._pending_warp is not None:
+            x, y = self._pending_warp
+            self._pending_warp = None
+            mac_input.warp_cursor(x, y)
+            self._warp_count += 1
+            self._warp_after = (x, y)
+            return
+
+        if self.capturing:
+            self.cursor.hide()      # 引用计数，重复调用不会叠加
+        else:
+            self.cursor.show()
 
     def on_button(self, bit: int, down: bool) -> bool:
         if not self.capturing:

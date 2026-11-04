@@ -46,16 +46,27 @@ class TestEdgeBasics(unittest.TestCase):
 
     def test_at_edge_right(self):
         spec = EdgeSpec(Edge.Right, SCREEN)
+        # macOS 的 CGEventGetLocation 在光标顶满右缘时返回的正是 right(3440)，
+        # 不是 Windows 那种 right-1。这一条必须算贴边，否则永远推不进去。
+        self.assertTrue(is_at_edge(spec, 3440, 700))    # 顶满右缘
         self.assertTrue(is_at_edge(spec, 3439, 700))    # 压线
         self.assertTrue(is_at_edge(spec, 3437, 700))    # 带宽内
         self.assertFalse(is_at_edge(spec, 3436, 700))   # 带外
         self.assertFalse(is_at_edge(spec, 100, 700))    # 屏幕中间
 
+    def test_at_edge_corner_at_bottom_right(self):
+        """右下角同时踩两个边界：x==right 和 y==bottom。"""
+        spec = EdgeSpec(Edge.Right, SCREEN)
+        self.assertTrue(is_at_edge(spec, 3440, 1440))
+        self.assertTrue(is_at_edge(spec, 3440, 1439))
+        bottom = EdgeSpec(Edge.Bottom, SCREEN)
+        self.assertTrue(is_at_edge(bottom, 1700, 1440))
+
     def test_at_edge_rejects_outside_screen(self):
         """屏外坐标不算贴边——多显示器时别把邻屏位置误判成本屏边缘。"""
         spec = EdgeSpec(Edge.Right, SCREEN)
-        self.assertFalse(is_at_edge(spec, 3440, 700))
-        self.assertFalse(is_at_edge(spec, 3439, 1440))
+        self.assertFalse(is_at_edge(spec, 3441, 700))
+        self.assertFalse(is_at_edge(spec, 3439, 1441))
 
     def test_components_all_edges(self):
         cases = [
@@ -127,6 +138,33 @@ class TestEdgeTrigger(unittest.TestCase):
         self.t.reset()
         self.assertFalse(self.t.active)
         self.assertEqual(self.t.accum, 0)
+
+    def test_enter_exit_enter_again(self):
+        """进得去、出得来、还要能再进去。
+
+        实机 bug 复现：往回推越界释放走的是 Controller.end_capture()，
+        它不经过 trigger.update()，所以 active 一直留在 True。此后 update()
+        永远走"捕获中"分支（只看位移方向、不再判贴边），再也不返回 Entered——
+        现象就是"第一次能推进去，出来之后再怎么推都回不去"。
+        """
+        # 第一次进入（光标顶满右缘，取到 right 本身）
+        self.assertIs(self.t.update(self.spec, 3440, 700, 12, 0), Change.Entered)
+        self.assertTrue(self.t.active)
+
+        # 往回推越界：Controller 直接结束捕获，外部负责复位
+        self.t.reset()
+
+        # 第二次推到边上，必须还能进
+        self.assertIs(self.t.update(self.spec, 3440, 700, 12, 0), Change.Entered)
+
+    def test_stale_active_blocks_reentry(self):
+        """不做复位的话，第二次进不去——把这个失败模式钉住，防止有人删掉复位。"""
+        self.t.update(self.spec, 3440, 700, 12, 0)
+        # 故意不复位，模拟旧代码
+        for _ in range(10):
+            self.assertIsNot(
+                self.t.update(self.spec, 3440, 700, 12, 0), Change.Entered
+            )
 
 
 class TestCalibration(unittest.TestCase):

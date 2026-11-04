@@ -51,8 +51,14 @@ SIDE_OUTWARD = {
 class PointerConfig:
     """width/height 是 iPhone 的像素尺寸（来自校准文件）。
 
-    gain 是"一个鼠标计数换多少 iPhone 像素"。默认 0.5 大约是手走 2.4 英寸横穿
-    整块 iPhone 屏（按 1000 DPI 估），比原来"手走满 3440 像素宽的屏幕"省一半行程。
+    gain 是"一个鼠标计数换多少 iPhone 像素"。
+
+    这个值必须跟着 iPhone 的像素密度走。iPhone 15 Pro 是 1180x2556 **像素**，
+    而 Mac 屏幕是 1680x1050 **点**——1:1 映射的话，横穿 iPhone 要 1180 个计数，
+    是横穿 Mac 屏幕的两倍多，手感就是"怎么推都推不到"。
+
+    默认 3.0：横穿 iPhone 宽度约 393 个计数，和一个手腕动作的量级相当。
+    嫌快嫌慢随时用 Ctrl+Option+= / Ctrl+Option+- 调。
 
     accel 是速度增益：0 表示线性（推荐，位置可预测）；大于 0 时快速划动会按
     speed/accel_ref 放大，最多放大到 accel_max 倍。低速时不受影响，所以精细
@@ -61,7 +67,7 @@ class PointerConfig:
 
     width: int = 1180
     height: int = 2556
-    gain: float = 1.0
+    gain: float = 3.0
     accel: float = 0.0
     accel_ref: float = 2500.0
     accel_max: float = 3.0
@@ -96,7 +102,8 @@ class VirtualPointer:
 
     def set_gain(self, gain: float) -> float:
         """运行时改增益（热键调速用）。返回实际生效值。"""
-        g = min(8.0, max(0.1, float(gain)))
+        # 上限放到 20：4K 屏 + 高像素密度手机的组合下，8 倍可能还不够
+        g = min(20.0, max(0.2, float(gain)))
         self.cfg = dataclasses.replace(self.cfg, gain=g)
         self.last_gain = g
         return g

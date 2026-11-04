@@ -87,8 +87,59 @@ def cursor_pos() -> tuple[float, float]:
 
 
 def warp_cursor(x: float, y: float) -> None:
-    """把光标挪到指定点。会产生一条 delta=0 的 MouseMoved。"""
+    """把光标挪到指定点（一次性动作，没有常驻状态）。
+
+    只在"退出捕获后放到边缘内侧"的时候用。捕获期间不再需要移动光标：
+    位移来自 IOHIDManager 的设备原始报文，与光标在哪毫无关系。
+    """
     Quartz.CGWarpMouseCursorPosition((float(x), float(y)))
+
+
+# 光标是否跟随物理鼠标。曾经在捕获期间被解耦过，现在**永远保持关联**。
+_associated = True
+
+
+def set_cursor_associated(on: bool) -> None:
+    """【已停用】不要再用它解耦光标。
+
+    为什么停用
+    ----------
+    `CGAssociateMouseAndMouseCursorPosition(False)` 是**系统级**开关：解耦之后
+    整个系统的指针都不再跟随鼠标。早期版本在捕获期间靠它绕开屏幕边缘的增量
+    钳制，代价是——程序只要没恢复成功（崩溃、被强杀、卡在某个回调里），
+    用户的鼠标就再也回不到自己屏幕上，只能重启。
+
+    这条路径已经被彻底移除：位移改从 IOHIDManager 的设备原始报文取，跟光标
+    位置无关，不需要也不应该动这个开关。
+
+    保留函数只是为了显式拒绝：万一有人（或未来的我）又想调它，会看到一行警告
+    而不是把别人的机器搞瘫。解除关联的请求会被静默忽略。
+    """
+    global _associated
+    if not on:
+        print(
+            "  ⚠️ 拒绝解耦光标：CGAssociateMouseAndMouseCursorPosition(False) "
+            "是系统级状态，漏恢复会让整台机器的鼠标失灵。已忽略。",
+            flush=True,
+        )
+        return
+    Quartz.CGAssociateMouseAndMouseCursorPosition(True)
+    _associated = True
+
+
+def cursor_associated() -> bool:
+    return _associated
+
+
+def force_associate_cursor() -> None:
+    """无条件恢复关联，不看进程内记账。
+
+    给 `--fix-cursor` 用：新进程的记账天然是「已关联」，可系统的真实状态可能还是
+    上一次进程被强杀时留下的解耦。只能直接调一次系统 API。
+    """
+    global _associated
+    Quartz.CGAssociateMouseAndMouseCursorPosition(True)
+    _associated = True
 
 
 class CursorGuard:
