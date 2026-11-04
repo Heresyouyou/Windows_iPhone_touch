@@ -48,6 +48,14 @@ WM_INPUT = 0x00FF
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 WM_QUIT = 0x0012
+WM_HOTKEY = 0x0312
+
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000
+VK_Q = 0x51
 
 RID_INPUT = 0x10000003
 RIDEV_INPUTSINK = 0x00000100
@@ -136,6 +144,11 @@ user32.CallNextHookEx.argtypes = [wt.HANDLE, ctypes.c_int, wt.WPARAM, wt.LPARAM]
 user32.CallNextHookEx.restype = LRESULT
 user32.UnhookWindowsHookEx.argtypes = [wt.HANDLE]
 user32.UnhookWindowsHookEx.restype = wt.BOOL
+
+user32.RegisterHotKey.argtypes = [wt.HWND, ctypes.c_int, wt.UINT, wt.UINT]
+user32.RegisterHotKey.restype = wt.BOOL
+user32.UnregisterHotKey.argtypes = [wt.HWND, ctypes.c_int]
+user32.UnregisterHotKey.restype = wt.BOOL
 
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
 user32.GetCursorPos.restype = wt.BOOL
@@ -293,6 +306,7 @@ class RawInputWindow:
         self._wndproc_ref = WNDPROC(self._wndproc)
         self.hwnd = None
         self._msg = wt.MSG()
+        self._hotkey: tuple[int, object] | None = None
 
     def create(self) -> None:
         hinst = kernel32.GetModuleHandleW(None)
@@ -319,6 +333,13 @@ class RawInputWindow:
         if msg == WM_INPUT:
             self._handle_raw(lparam)
             return 0
+        if msg == WM_HOTKEY:
+            try:
+                if self._hotkey:
+                    self._hotkey[1]()
+            except Exception:
+                pass
+            return 0
         if msg == WM_CLOSE:
             user32.DestroyWindow(hwnd)
             return 0
@@ -326,6 +347,21 @@ class RawInputWindow:
             user32.PostQuitMessage(0)
             return 0
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def register_hotkey(self, mods: int, vk: int, callback) -> bool:
+        """注册全局热键。捕获期间鼠标被吞、光标不动，热键是唯一的兜底出口。"""
+        if self._hotkey:
+            self.unregister_hotkey()
+        kid = 1
+        if not user32.RegisterHotKey(self.hwnd, kid, mods, vk):
+            return False
+        self._hotkey = (kid, callback)
+        return True
+
+    def unregister_hotkey(self) -> None:
+        if self._hotkey:
+            user32.UnregisterHotKey(self.hwnd, self._hotkey[0])
+            self._hotkey = None
 
     def _handle_raw(self, hraw) -> None:
         size = wt.UINT(0)
@@ -359,6 +395,7 @@ class RawInputWindow:
         return True
 
     def destroy(self) -> None:
+        self.unregister_hotkey()
         if self.hwnd:
             user32.DestroyWindow(self.hwnd)
             self.hwnd = None

@@ -25,6 +25,9 @@ from ios_screen.edge_trigger import (  # noqa: E402
     parse_edge,
 )
 from ios_screen.geometry import Rect  # noqa: E402
+from ios_screen.vpointer import (  # noqa: E402
+    PointerConfig, PushThrough, SIDE_OUTWARD, VirtualPointer,
+)
 
 SCREEN = Rect(0, 0, 3440, 1440)
 CAL_PATH = os.path.join(
@@ -199,6 +202,120 @@ class TestCalibration(unittest.TestCase):
             Calibration.from_json(
                 '{"screenWidth":100,"screenHeight":100,"distances":[0,2,1]}'
             )
+
+
+class TestVirtualPointer(unittest.TestCase):
+    def make(self, **kw) -> VirtualPointer:
+        cfg = PointerConfig(width=1180, height=2556, gain=0.5, **kw)
+        return VirtualPointer(cfg)
+
+    def test_linear_gain(self):
+        p = self.make()
+        p.set(100, 100)
+        dx, dy = p.move(10, -10)
+        self.assertAlmostEqual(dx, 5.0)
+        self.assertAlmostEqual(dy, -5.0)
+        self.assertAlmostEqual(p.x, 105.0)
+        self.assertAlmostEqual(p.y, 95.0)
+
+    def test_unlimited_travel_is_clamped_not_lost(self):
+        """一直朝一个方向推：位置停在边界，但再来一次仍然不会越界。"""
+        p = self.make()
+        p.set(0, 0)
+        for _ in range(100):
+            p.move(200, 200)
+        self.assertEqual(p.x, float(p.cfg.width - 1))
+        self.assertEqual(p.y, float(p.cfg.height - 1))
+
+    def test_returns_applied_delta_after_clamp(self):
+        """顶到边界后返回的位移要变小，否则拖动报文会一直推。"""
+        p = self.make()
+        p.set(float(p.max_x) - 2, 0)
+        dx, _ = p.move(100, 0)
+        self.assertAlmostEqual(dx, 2.0)
+
+    def test_at_side(self):
+        p = self.make()
+        p.set(0, 0)
+        self.assertTrue(p.at_side("left"))
+        self.assertTrue(p.at_side("top"))
+        self.assertFalse(p.at_side("right"))
+        p.set(p.max_x, p.max_y)
+        self.assertTrue(p.at_side("right"))
+        self.assertTrue(p.at_side("bottom"))
+
+    def test_accel_off_is_speed_independent(self):
+        p = self.make()
+        self.assertAlmostEqual(p.gain_for(10, 0, 0.001), 0.5)
+        self.assertAlmostEqual(p.gain_for(10, 0, 1.0), 0.5)
+
+    def test_accel_boosts_fast_strokes(self):
+        p = self.make(accel=1.0, accel_ref=1000.0, accel_max=3.0)
+        slow = p.gain_for(10, 0, 0.1)     # 100 计数/秒
+        fast = p.gain_for(10, 0, 0.001)   # 10000 计数/秒
+        self.assertGreater(fast, slow)
+        self.assertLessEqual(fast, 0.5 * 3.0)
+
+    def test_edge_excess_only_counts_clamped_part(self):
+        """没贴边时快速划动，被边界吃掉的量是 0，不能算成"要出去"。"""
+        p = self.make()
+        p.set(400, 500)
+        applied = p.move(100, 0)          # 50px，离右边界还很远
+        self.assertEqual(p.edge_excess_px(100, 0, "right", applied), 0.0)
+
+    def test_edge_excess_overflow(self):
+        p = self.make()
+        p.set(float(p.max_x) - 10, 500)
+        applied = p.move(100, 0)          # 请求 50px，只剩 10px 可用
+        self.assertAlmostEqual(p.edge_excess_px(100, 0, "right", applied), 40.0)
+
+    def test_edge_excess_wrong_direction(self):
+        p = self.make()
+        p.set(0.0, 500)
+        applied = p.move(100, 0)          # 往内推
+        self.assertEqual(p.edge_excess_px(100, 0, "left", applied), 0.0)
+
+
+class TestPushThrough(unittest.TestCase):
+    def test_accumulates_until_threshold(self):
+        pt = PushThrough(threshold_px=100.0)
+        self.assertFalse(pt.update(True, 40.0))
+        self.assertFalse(pt.update(True, 40.0))
+        self.assertTrue(pt.update(True, 40.0))
+
+    def test_resets_after_trigger(self):
+        pt = PushThrough(threshold_px=100.0)
+        pt.update(True, 100.0)
+        self.assertEqual(pt.accum, 0)
+        self.assertFalse(pt.update(True, 10.0))
+
+    def test_inward_decays(self):
+        """贴着边操作（不往外推）不该攒出退出。"""
+        pt = PushThrough(threshold_px=100.0)
+        pt.update(True, 60.0)
+        for _ in range(30):
+            pt.update(False, 5.0)
+        self.assertEqual(pt.accum, 0)
+
+    def test_zero_counts_while_pushing(self):
+        pt = PushThrough(threshold_px=10.0)
+        self.assertFalse(pt.update(True, 0.0))
+        self.assertFalse(pt.update(True, -5.0))
+
+    def test_side_outward_signs(self):
+        self.assertEqual(SIDE_OUTWARD["left"](-7, 0), 7)
+        self.assertEqual(SIDE_OUTWARD["right"](7, 0), 7)
+        self.assertEqual(SIDE_OUTWARD["top"](0, -7), 7)
+        self.assertEqual(SIDE_OUTWARD["bottom"](0, 7), 7)
+
+    def test_release_at_minus_five(self):
+        """进入点记 0，越界后为负，负到 -5 就释放。"""
+        pt = PushThrough(threshold_px=5.0)
+        self.assertFalse(pt.update(True, 3.0))
+        self.assertAlmostEqual(pt.signed, -3.0)
+        self.assertFalse(pt.update(True, 1.5))
+        self.assertTrue(pt.update(True, 0.6))   # 累计 5.1 ≥ 5
+        self.assertEqual(pt.accum, 0.0)
 
 
 if __name__ == "__main__":

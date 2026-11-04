@@ -88,13 +88,33 @@ python -m ios_screen.app --edge right          # edge mode: push the mouse past 
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--mode` | `absolute` | `absolute` coordinates or `relative` accumulation |
+| `--mode` | `absolute` | virtual absolute coordinates / relative accumulation |
+| `--gain` | `0.5` | absolute mode: iPhone pixels per mouse count |
+| `--accel` | `0.0` | absolute mode: speed gain, `0` = linear |
+| `--escape-px` | `5` | release back to Windows after pushing this far past the edge |
 | `--calibration` | bundled iPhone 15 Pro curve | relative mode only |
-| `--sensitivity` | `1.0` | movement multiplier |
+| `--sensitivity` | `1.0` | relative-mode movement multiplier |
 | `--edge` | `right` | edge-mode direction |
+| `--zone-start/--zone-end` | `0..1` | restrict the trigger to a segment of that edge |
 | `--screen` | `primary` | which monitor edge mode uses |
 | `--list` | — | list all monitors |
 | `--dry-run` | — | print reports instead of sending |
+
+### Infinite travel: virtual absolute coordinates
+
+Absolute reports are the responsive path, but taking the coordinate from where the
+cursor physically sits caps the hand travel at the size of that window or screen.
+This build splits the two apart:
+
+- **Position** — a virtual coordinate accumulated from Raw Input deltas. The cursor
+  is hidden and frozen during capture, so the hand can keep pushing forever.
+- **Landing** — one absolute report per change, no `30 ms × N` catch-up.
+- **Exit** — a signed travel counter: entry point is `0`, moving deeper is positive,
+  moving back turns negative; at **-5 px** the pointer is released and the Windows
+  cursor returns at the edge it left from.
+
+`--gain 0.5` means roughly 2.4 inches of hand travel crosses the whole iPhone;
+raise it for a faster pointer. `Ctrl+Alt+Q` also releases (and quits when idle).
 
 ---
 
@@ -270,13 +290,31 @@ python -m ios_screen.app --edge right          # 边缘模式：鼠标推出屏�
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--mode` | `absolute` | `absolute` 绝对坐标 / `relative` 相对累积 |
+| `--mode` | `absolute` | `absolute` 虚拟绝对坐标 / `relative` 相对累积 |
+| `--gain` | `0.5` | 绝对模式：一个鼠标计数换多少 iPhone 像素 |
+| `--accel` | `0.0` | 绝对模式：速度增益，`0` 为线性 |
+| `--escape-px` | `5` | 越过退出边多少像素后释放回 Windows |
 | `--calibration` | 自带 iPhone 15 Pro 曲线 | 仅相对模式使用 |
-| `--sensitivity` | `1.0` | 位移倍率 |
+| `--sensitivity` | `1.0` | 相对模式的位移倍率 |
 | `--edge` | `right` | 边缘模式的方向 |
+| `--zone-start/--zone-end` | `0..1` | 只让该边缘的一段生效 |
 | `--screen` | `primary` | 边缘模式使用哪块屏 |
 | `--list` | — | 列出所有显示器 |
 | `--dry-run` | — | 不发送，只打印报文 |
+
+### 无限行程：虚拟绝对坐标
+
+绝对报文最跟手，但如果坐标取自光标在窗口/屏幕上的物理位置，手的行程就被那块
+区域锁死——窗口只有 420 像素宽，光标一碰边就到头。这一版把两件事拆开：
+
+- **位置**：由 Raw Input 的相对位移累积出的虚拟坐标；捕获期间光标被隐藏并冻住，
+  所以手可以一直朝一个方向推，没有上限。
+- **落点**：一条绝对报文到位，没有 `30ms × N` 的追赶。
+- **退出**：有符号行程计数——进入点记 0，往屏幕深处推为正，往回推为负；
+  减到 **-5 像素** 即释放，Windows 光标回到原来出去的那条边上。
+
+`--gain 0.5` 大约手走 2.4 英寸横穿整块 iPhone，想更快就调大。`Ctrl+Alt+Q`
+随时释放（未捕获时是退出程序）。
 
 ---
 

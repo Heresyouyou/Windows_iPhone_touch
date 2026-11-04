@@ -22,13 +22,17 @@ import time
 
 from . import hid
 from .calibration import Calibration
-from .edge_trigger import Edge, EdgeSpec, EdgeTrigger, EdgeTriggerConfig, edge_name, parse_edge
+from .edge_trigger import (
+    Change, Edge, EdgeSpec, EdgeTrigger, EdgeTriggerConfig, edge_name, parse_edge,
+)
 from .geometry import Rect
 from .hogp import HogpService
+from .vpointer import PointerConfig, PushThrough, VirtualPointer
 from . import winput
 
 # 边缘方向的中文名，只用于启动提示
 _EDGE_CN = {Edge.Right: "右", Edge.Left: "左", Edge.Top: "上", Edge.Bottom: "下"}
+_SIDE_CN = {"left": "左", "right": "右", "top": "上", "bottom": "下"}
 
 CAL_DEFAULT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -36,8 +40,19 @@ CAL_DEFAULT = os.path.join(
     "calibration-iphone15pro.json",
 )
 
-SEND_INTERVAL = 0.03
+SEND_INTERVAL = 0.03      # 相对模式：iOS 按报文速率分加速度档，30ms 是校准前提
+ABS_INTERVAL = 0.01       # 绝对模式：位置是"快照"，速率不影响落点，10ms 足够跟手
+HOLD_RESEND = 0.1         # 按住不动时补发按钮状态的周期
 MOVE = 0x01  # usFlags 的 MOUSE_MOVE_ABSOLUTE 位
+
+# 进入方向 → iPhone 上与之相邻的那条边（也就是"退出边"）
+# 从屏幕下方移出 → 落到 iPhone 顶部；想回去就往回推（向上）。
+ENTRY_SIDE = {
+    Edge.Right: "left",
+    Edge.Left: "right",
+    Edge.Top: "bottom",
+    Edge.Bottom: "top",
+}
 
 
 class Shared:
@@ -53,11 +68,13 @@ class Shared:
 
 
 class HogpWorker(threading.Thread):
-    def __init__(self, svc: HogpService, cal: Calibration, shared: Shared, *, dry: bool, verbose: bool):
+    def __init__(self, svc: HogpService, cal: Calibration, shared: Shared, *,
+                 dry: bool, verbose: bool, mode: str = "relative"):
         super().__init__(daemon=True, name="hogp")
         self.svc = svc
         self.cal = cal
         self.shared = shared
+        self.mode = mode
         self.dry = dry
         self.verbose = verbose
         self.loop = asyncio.new_event_loop()
@@ -67,6 +84,12 @@ class HogpWorker(threading.Thread):
         self._py = 0.0
         self._last_dx = 0
         self._last_buttons = 0
+        # 绝对模式：上次发出的 0..32767 坐标与上次发出的像素坐标（算拖动位移用）
+        self._abs_x = -1
+        self._abs_y = -1
+        self._abs_fx = 0.0
+        self._abs_fy = 0.0
+        self._hold_at = 0.0
         self.sent = 0
         self.send_fail = 0
 
@@ -88,13 +111,22 @@ class HogpWorker(threading.Thread):
                 return
         self.ready.set()
 
+        interval = ABS_INTERVAL if self.mode == "absolute" else SEND_INTERVAL
         while self.shared.running:
-            await asyncio.sleep(SEND_INTERVAL)
+            await asyncio.sleep(interval)
             await self._tick()
 
     async def _tick(self) -> None:
         if not self.shared.capturing:
             return
+        if self.mode == "absolute":
+            await self._tick_absolute()
+        else:
+            await self._tick_relative()
+
+    # ----- 相对模式：查校准表，30ms 一步 -----
+
+    async def _tick_relative(self) -> None:
         with self.shared.lock:
             tx, ty = self.shared.target_x, self.shared.target_y
             buttons = self.shared.buttons
@@ -122,6 +154,97 @@ class HogpWorker(threading.Thread):
                     self.send_fail += 1
             except Exception:
                 self.send_fail += 1
+
+    # ----- 绝对模式：位置一条报文到位，按钮另走相对通道 -----
+
+    async def _tick_absolute(self) -> None:
+        with self.shared.lock:
+            tx, ty = self.shared.target_x, self.shared.target_y
+            buttons = self.shared.buttons
+
+        ax, ay = self._to_abs(tx, ty)
+        changed = (ax != self._abs_x) or (ay != self._abs_y)
+        btn_changed = buttons != self._last_buttons
+        self._last_buttons = buttons
+
+        if buttons:
+            # 拖动只能走相对报文，而且必须带真实位移：
+            #   · 绝对报文不带按钮语义（实测按住无效）；
+            #   · dx=dy=0 的相对报文只维持按钮，构不成拖动；
+            #   · 两条一起发会让 iOS 端重复位移，所以拖动期间只发相对。
+            dx = int(round(tx - self._abs_fx))
+            dy = int(round(ty - self._abs_fy))
+            if dx or dy:
+                await self._send_relative(buttons, dx, dy)
+                self._abs_fx, self._abs_fy = tx, ty
+                self._abs_x, self._abs_y = ax, ay
+            elif btn_changed or time.monotonic() - self._hold_at >= HOLD_RESEND:
+                await self._send_relative(buttons, 0, 0)
+                self._hold_at = time.monotonic()
+            return
+
+        # 悬停：绝对位置一变就发。松开按钮的那一帧也要发一次，
+        # 把指针重新锚回模型位置（拖动期间走的是相对位移，可能有累积误差）。
+        if changed or btn_changed:
+            await self._send_absolute(0, ax, ay)
+            self._abs_x, self._abs_y = ax, ay
+        self._abs_fx, self._abs_fy = tx, ty
+
+    def _to_abs(self, x: float, y: float) -> tuple[int, int]:
+        w = max(1, self.cal.screen_width - 1)
+        h = max(1, self.cal.screen_height - 1)
+        ax = int(round(max(0.0, min(float(w), x)) / w * hid.ABSOLUTE_MAX))
+        ay = int(round(max(0.0, min(float(h), y)) / h * hid.ABSOLUTE_MAX))
+        return ax, ay
+
+    async def _send_absolute(self, buttons: int, ax: int, ay: int) -> None:
+        self.sent += 1
+        if self.dry:
+            if self.verbose:
+                print(f"  report id=2 [{buttons:02X} {ax:04X} {ay:04X}]", flush=True)
+            return
+        try:
+            ok = await self.svc.send(
+                hid.RID_ABSOLUTE, hid.encode_absolute_pointer(buttons, ax, ay)
+            )
+            if not ok:
+                self.send_fail += 1
+        except Exception:
+            self.send_fail += 1
+
+    async def _send_relative(self, buttons: int, dx: int, dy: int) -> None:
+        self.sent += 1
+        if self.dry:
+            if self.verbose:
+                print(f"  report id=3 [{buttons:02X} {dx:04d} {dy:04d}]", flush=True)
+            return
+        try:
+            ok = await self.svc.send_mouse(buttons, dx, dy)
+            if not ok:
+                self.send_fail += 1
+        except Exception:
+            self.send_fail += 1
+
+    def send_absolute_px(self, buttons: int, x: float, y: float) -> None:
+        """按钮状态变化时立即发，不等 10ms 节拍（按下+抬起可能落在同一拍里）。"""
+        ax, ay = self._to_abs(x, y)
+        if self.dry or self.loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._send_absolute(buttons, ax, ay), self.loop)
+            if buttons:
+                asyncio.run_coroutine_threadsafe(self._send_relative(buttons, 0, 0), self.loop)
+        except Exception:
+            pass
+
+    def invalidate_absolute(self) -> None:
+        """让下一次节拍无条件发一条绝对报文。
+
+        每次重新进入捕获都要调用：否则新落点恰好等于上次发过的坐标时会被
+        当成"没变化"跳过，iPhone 上的指针就停在上次的位置不动。
+        """
+        self._abs_x = -1
+        self._abs_y = -1
 
     def jump_to(self, x: float, y: float) -> None:
         """归位后把预测位置重置到 (0,0)，不跨线程改 _px 的话会立刻又漂回去。"""
@@ -163,21 +286,6 @@ class HogpWorker(threading.Thread):
         except Exception:
             pass
 
-    def send_absolute(self, buttons: int, x: int, y: int) -> None:
-        """绝对坐标：一条报文直接定位，没有累积、没有延迟、不依赖校准曲线。
-
-        x/y 范围 0..32767，对应 iPhone 整屏。这是 iPhone Use 的默认模式。
-        """
-        if self.dry or self.loop is None:
-            return
-        try:
-            asyncio.run_coroutine_threadsafe(
-                self.svc.send(hid.RID_ABSOLUTE, hid.encode_absolute_pointer(buttons, x, y)),
-                self.loop,
-            )
-        except Exception:
-            pass
-
     def stop(self) -> None:
         self.shared.running = False
         if not self.dry:
@@ -195,8 +303,10 @@ class App:
         self.cal = Calibration.from_file(args.calibration)
         self.shared = Shared()
         self.svc = HogpService()
+        self.mode = args.mode
         self.worker = HogpWorker(
-            self.svc, self.cal, self.shared, dry=args.dry_run, verbose=args.verbose
+            self.svc, self.cal, self.shared,
+            dry=args.dry_run, verbose=args.verbose, mode=args.mode,
         )
         self.cursor = winput.CursorGuard()
         self.swallower = winput.MouseSwallower()
@@ -207,12 +317,27 @@ class App:
             raise SystemExit(f"找不到显示器 {args.screen!r}，用 --list 看有哪些")
         self.screen = Rect(mon["x"], mon["y"], mon["w"], mon["h"])
         self.monitor_name = mon["device"]
-        self.edge = EdgeSpec(edge=args.edge, screen=self.screen)
+        self.edge = EdgeSpec(
+            edge=args.edge, screen=self.screen,
+            zone_start=args.zone_start, zone_end=args.zone_end,
+        )
         self.trigger = EdgeTrigger(
-            EdgeTriggerConfig(enterThreshold=args.enter_threshold, exitThreshold=args.exit_threshold)
+            EdgeTriggerConfig(enter_threshold=args.enter_threshold, exit_threshold=args.exit_threshold)
         )
         # 横向满屏对应 iPhone 横向满屏；纵向因宽高比差异不可能同时精确，用灵敏度补偿
         self.px_per_count = self.cal.screen_width / max(1, self.screen.w) * args.sensitivity
+
+        # 绝对模式：位置由虚拟坐标累积，手可以无限推；不再依赖光标位置
+        self.vp = VirtualPointer(PointerConfig(
+            width=self.cal.screen_width,
+            height=self.cal.screen_height,
+            gain=args.gain,
+            accel=args.accel,
+        ))
+        self.push = PushThrough(args.escape_px)
+        # 进入边 → 退出边：从哪边进来，就往哪边推回去
+        self.exit_side = ENTRY_SIDE[self.edge.edge]
+        self._last_event_t = time.monotonic()
 
     # ---------- 捕获 ----------
 
@@ -220,39 +345,56 @@ class App:
         self.shared.capturing = True
         self.cursor.hide()
         self.swallower.active = True
+        self.push.reset()
+        self._last_event_t = time.monotonic()
 
-        # 位置映射：进入点由鼠标在边缘上的位置决定另一个轴。
-        # 这样"鼠标在屏幕右缘的上半部"就落在 iPhone 上半部，符合"iPhone 就是右边一块屏"的直觉。
-        # 横向从对侧边缘进（右缘进入 → iPhone 左缘），纵向按比例；反之亦然。
+        # 落点由"从哪条边进来"决定：入口边就是 iPhone 靠 Windows 的那一侧，
+        # 于是往回推就是原路返回。另一个轴按光标在边上的比例映射，符合
+        # "iPhone 就是屏幕外面接着的一块"这个直觉。
         l, t, w, h = self.screen.x, self.screen.y, self.screen.w, self.screen.h
         cx, cy = winput.cursor_pos()
         ipw, iph = self.cal.screen_width, self.cal.screen_height
         fx = (cx - l) / max(1, w - 1)
         fy = (cy - t) / max(1, h - 1)
-        if self.edge.edge is Edge.Right:
+        side = self.exit_side
+        if side == "left":          # 从屏幕右缘移出 → 落在 iPhone 左缘
             tx, ty = 0.0, fy * (iph - 1)
-        elif self.edge.edge is Edge.Left:
+        elif side == "right":       # 从屏幕左缘移出 → 落在 iPhone 右缘
             tx, ty = float(ipw - 1), fy * (iph - 1)
-        elif self.edge.edge is Edge.Top:
-            tx, ty = fx * (ipw - 1), 0.0
-        else:
+        elif side == "bottom":      # 从屏幕上缘移出（iPhone 在上方）→ 落在 iPhone 底缘
             tx, ty = fx * (ipw - 1), float(iph - 1)
-        # 只改目标、不改预测位置：让指针从上次位置平滑滑过去，而不是瞬移。
-        # 盲控拿不到 iPhone 的真实指针位置，predicted 是唯一依据，硬跳只会让第一次移动失准。
+        else:                       # 从屏幕下缘移出（iPhone 在下方）→ 落在 iPhone 顶缘
+            tx, ty = fx * (ipw - 1), 0.0
+
+        self.vp.set(tx, ty)
         with self.shared.lock:
             self.shared.target_x = tx
             self.shared.target_y = ty
+        # 同一落点第二次进入时坐标没变，不等节拍就必须重新锚一次
+        self.worker.invalidate_absolute()
 
-        # 指针挪到屏幕中央：贴着边缘时下面就是任务栏/窗口，万一漏吞会误点
+        # 指针挪到屏幕中央：贴着边缘时下面就是任务栏/窗口，万一漏吞会误点。
+        # 绝对模式下光标位置已经不参与计算，这一步纯粹是安全措施。
         winput.user32.SetCursorPos(l + w // 2, t + h // 2)
         if self.args.verbose:
-            print(f"  ▶ 进入捕获  edge={edge_name(self.edge.edge)} "
-                  f"映射到 ({tx:.0f},{ty:.0f})", flush=True)
+            print(f"  ▶ 进入捕获  edge={edge_name(self.edge.edge)}  "
+                  f"落点 ({tx:.0f},{ty:.0f})  模式 {self.mode}", flush=True)
 
     def end_capture(self) -> None:
+        with self.shared.lock:
+            had_buttons = self.shared.buttons
+            self.shared.buttons = 0
+        # 退出时若还按着键，必须补一条释放报文，否则 iPhone 上会一直按住
+        if had_buttons:
+            if self.mode == "absolute":
+                self.worker.send_absolute_px(0, self.vp.x, self.vp.y)
+            else:
+                self.worker.send_mouse_now(0)
+
         self.shared.capturing = False
         self.swallower.active = False
         self.cursor.show()
+        self.trigger.reset()
         # 放回边缘内侧一点，否则会立刻再次触发进入，形成"进-退-进"的抖动
         l, t, w, h = self.screen.x, self.screen.y, self.screen.w, self.screen.h
         if self.edge.edge is Edge.Right:
@@ -269,16 +411,46 @@ class App:
     # ---------- 输入 ----------
 
     def on_mouse(self, dx: int, dy: int, btn_flags: int) -> None:
-        cx, cy = winput.cursor_pos()
-        change = self.trigger.update(self.edge, cx, cy, dx, dy)
-        if change is EdgeTrigger.Change.Entered:
-            self.begin_capture()
-        elif change is EdgeTrigger.Change.Exited:
-            self.end_capture()
-
         if not self.shared.capturing:
+            cx, cy = winput.cursor_pos()
+            if self.trigger.update(self.edge, cx, cy, dx, dy) is Change.Entered:
+                # 触发用的这一下位移不再计入手机端，否则刚进来就离边界半步
+                self.begin_capture()
             return
 
+        if self.mode == "absolute":
+            if not self._move_absolute(dx, dy):
+                return
+        else:
+            # 相对模式仍然靠"反向推回"退出：光标位置在捕获时没有意义，
+            # 只看朝内的累计位移
+            cx, cy = winput.cursor_pos()
+            if self.trigger.update(self.edge, cx, cy, dx, dy) is Change.Exited:
+                self.end_capture()
+                return
+            self._move_relative(dx, dy)
+
+        self._update_buttons(btn_flags)
+
+    def _move_absolute(self, dx: int, dy: int) -> bool:
+        """虚拟坐标累积 + 顶边退出判定。返回 False 表示已经退出捕获。"""
+        now = time.monotonic()
+        dt = min(0.1, max(1e-4, now - self._last_event_t))
+        self._last_event_t = now
+
+        applied = self.vp.move(dx, dy, dt)
+        # 有符号行程：进入点 = 0，向下为 +，向上为 −；负到 escape_px 就释放回 Windows
+        excess = self.vp.edge_excess_px(dx, dy, self.exit_side, applied)
+        if self.push.update(excess > 0, excess):
+            self.end_capture()
+            return False
+
+        with self.shared.lock:
+            self.shared.target_x = self.vp.x
+            self.shared.target_y = self.vp.y
+        return True
+
+    def _move_relative(self, dx: int, dy: int) -> None:
         with self.shared.lock:
             self.shared.target_x = max(
                 0.0, min(float(self.cal.screen_width - 1),
@@ -288,7 +460,13 @@ class App:
                 0.0, min(float(self.cal.screen_height - 1),
                          self.shared.target_y + dy * self.px_per_count)
             )
-            # usButtonFlags 的按下/抬起位
+
+    def _update_buttons(self, btn_flags: int) -> None:
+        # usButtonFlags 的按下/抬起位
+        if not btn_flags:
+            return
+        with self.shared.lock:
+            before = self.shared.buttons
             if btn_flags & 0x0001:
                 self.shared.buttons |= 0x01
             if btn_flags & 0x0002:
@@ -297,6 +475,25 @@ class App:
                 self.shared.buttons |= 0x02
             if btn_flags & 0x0008:
                 self.shared.buttons &= ~0x02
+            if btn_flags & 0x0010:
+                self.shared.buttons |= 0x04
+            if btn_flags & 0x0020:
+                self.shared.buttons &= ~0x04
+            after = self.shared.buttons
+        if after == before:
+            return
+        # 按钮变化立即发：按下和抬起经常落在同一个 10ms 节拍里，等节拍会被合并成"没按过"
+        if self.mode == "absolute":
+            self.worker.send_absolute_px(after, self.vp.x, self.vp.y)
+        else:
+            self.worker.send_mouse_now(after)
+
+    def force_exit(self) -> None:
+        """Ctrl+Alt+Q：捕获中先退出捕获，再按一次结束程序。"""
+        if self.shared.capturing:
+            self.end_capture()
+        else:
+            self.shared.running = False
 
     # ---------- 主循环 ----------
 
@@ -315,20 +512,37 @@ class App:
         print(f"屏幕 : {self.monitor_name} {self.screen.w}x{self.screen.h} "
               f"at ({self.screen.x},{self.screen.y})")
         print(f"边缘 : {edge_name(self.edge.edge)}  "
-              f"进入阈值 {self.trigger.cfg.enterThreshold} 退出阈值 {self.trigger.cfg.exitThreshold} 计数")
-        print(f"比例 : {self.px_per_count:.3f} iPhone像素/鼠标计数"
-              f"（灵敏度 {self.args.sensitivity}）")
+              f"触发区 {self.edge.zone_start * 100:.0f}%-{self.edge.zone_end * 100:.0f}%  "
+              f"进入阈值 {self.trigger.cfg.enter_threshold} 计数")
+        if self.mode == "absolute":
+            print(f"模式 : absolute  增益 {self.args.gain:.2f} iPhone像素/计数  "
+                  f"顶边 {self.exit_side} 越过 {self.push.threshold:.0f}px 即释放")
+        else:
+            print(f"模式 : relative  比例 {self.px_per_count:.3f} iPhone像素/鼠标计数"
+                  f"（灵敏度 {self.args.sensitivity}）")
         if self.args.dry_run:
             print("模式 : dry-run，报文只打印不发蓝牙")
         else:
+            # 广播是异步起的，直接取会打印成 False，看着像失败
+            t0 = time.monotonic()
+            while not self.svc.advertising and time.monotonic() - t0 < 2.0:
+                time.sleep(0.05)
             print(f"蓝牙 : 广播中={self.svc.advertising}  订阅={self.svc.subscribed}")
 
         self.win = winput.RawInputWindow(self.on_mouse)
         self.win.create()
+        if not self.win.register_hotkey(
+            winput.MOD_CONTROL | winput.MOD_ALT | winput.MOD_NOREPEAT,
+            winput.VK_Q,
+            self.force_exit,
+        ):
+            print("⚠️ 全局热键 Ctrl+Alt+Q 注册失败（可能被别的程序占用），"
+                  "退出捕获请改用反向推出。")
         self.swallower.install()
 
-        print("\n就绪。鼠标推向屏幕%s缘即接管 iPhone；反向推回退出。Ctrl+C 结束。\n"
-              % _EDGE_CN[self.edge.edge])
+        print("\n就绪。鼠标推向屏幕%s缘即接管 iPhone，落点在对侧 iPhone 的%s边（记为 0）；"
+              "往回推越过该边 %.0fpx 即释放回 Windows。Ctrl+Alt+Q 也可退出。\n"
+              % (_EDGE_CN[self.edge.edge], _SIDE_CN[self.exit_side], self.push.threshold))
 
         try:
             while self.shared.running:
@@ -389,13 +603,27 @@ def main(argv: list[str] | None = None) -> int:
         prog="ios-screen", description="把 iPhone 当作屏幕边缘外的一块屏（Windows 盲控版）"
     )
     ap.add_argument("--edge", default="right", help="越界方向 right/left/top/bottom，默认 right")
+    ap.add_argument("--zone-start", type=float, default=0.0,
+                    help="沿边触发区起点(0~1)，如 0.35 表示只让 35%% 之后的边段生效")
+    ap.add_argument("--zone-end", type=float, default=1.0,
+                    help="沿边触发区终点(0~1)")
     ap.add_argument("--screen", default="primary",
                     help="目标显示器：primary / 序号 / 设备名片段，默认 primary")
     ap.add_argument("--list", action="store_true", help="列出所有显示器后退出")
     ap.add_argument("--calibration", default=CAL_DEFAULT, help="校准 json")
-    ap.add_argument("--sensitivity", type=float, default=1.0, help="灵敏度倍数，默认 1.0")
+    ap.add_argument("--mode", choices=["absolute", "relative"], default="absolute",
+                    help="absolute=虚拟绝对坐标(默认，无累积延迟，手可无限推)；"
+                         "relative=相对累积(需校准曲线，30ms 一步)")
+    ap.add_argument("--gain", type=float, default=0.5,
+                    help="绝对模式增益：一个鼠标计数换多少 iPhone 像素，默认 0.5")
+    ap.add_argument("--accel", type=float, default=0.0,
+                    help="绝对模式速度增益，0=线性(默认)，0.5~1 快划时放大行程")
+    ap.add_argument("--escape-px", type=float, default=5.0,
+                    help="越过退出边多少像素就释放回 Windows，默认 5")
+    ap.add_argument("--sensitivity", type=float, default=1.0, help="相对模式灵敏度倍数，默认 1.0")
     ap.add_argument("--enter-threshold", type=int, default=12, help="进入捕获所需朝外计数")
-    ap.add_argument("--exit-threshold", type=int, default=60, help="退出捕获所需朝内计数")
+    ap.add_argument("--exit-threshold", type=int, default=60,
+                    help="相对模式退出捕获所需朝内计数")
     ap.add_argument("--dry-run", action="store_true", help="不发蓝牙，只打印报文")
     ap.add_argument("--home", action="store_true", help="只发归位报文")
     ap.add_argument("-v", "--verbose", action="store_true")

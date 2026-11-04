@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 import tkinter as tk
 
 from . import hid
@@ -20,8 +21,12 @@ from .app import CAL_DEFAULT, HogpWorker, Shared
 from .calibration import Calibration
 from .hogp import HogpService
 from .keymap import KeyboardState
+from .vpointer import PointerConfig, VirtualPointer
+from . import winput
 
 PANEL_W, PANEL_H = 420, 900
+# 光标离画布中心超过这个距离就把它挪回中心，于是手的行程没有上限
+WARP_RADIUS = 110
 
 
 class PanelApp:
@@ -30,12 +35,23 @@ class PanelApp:
         self.cal = Calibration.from_file(args.calibration)
         self.shared = Shared()
         self.svc = HogpService()
+        self.mode = args.mode
         self.worker = HogpWorker(
-            self.svc, self.cal, self.shared, dry=args.dry_run, verbose=args.verbose
+            self.svc, self.cal, self.shared,
+            dry=args.dry_run, verbose=args.verbose, mode=args.mode,
         )
         # 窗口宽 = iPhone 宽，鼠标横向扫过窗口即指针扫过全屏
         self.px_per_count = self.cal.screen_width / PANEL_W * args.sensitivity
-        self.mode = args.mode
+        # 绝对模式的位置来自虚拟坐标，不再取光标在窗口里的位置——
+        # 窗口只有 420 像素宽，靠坐标映射的话光标一碰边就到头了。
+        self.vp = VirtualPointer(PointerConfig(
+            width=self.cal.screen_width,
+            height=self.cal.screen_height,
+            gain=args.gain,
+        ))
+        self.cursor = winput.CursorGuard()
+        self._capturing = False
+        self._last_t = time.monotonic()
         self.cur = (0, 0)
         self.abs_sent = 0
         self.last: tuple[int, int] | None = None
@@ -67,7 +83,8 @@ class PanelApp:
         self.canvas.create_rectangle(4, 4, cw - 4, PANEL_H - 4, outline="#4a4a4a", width=2)
         self.canvas.create_text(
             cw // 2, PANEL_H // 2,
-            text="iPhone 操作区\n\n把鼠标移进这块区域\n移动鼠标即控制 iPhone",
+            text="iPhone 操作区\n\n移进来即捕获，光标钉在中心\n"
+                 "手可以一直推，不会撞到窗口边\n\nEsc 释放",
             fill="#7a7a7a", font=("Microsoft YaHei", 11), justify="center",
         )
 
@@ -84,7 +101,9 @@ class PanelApp:
         self.root.bind("<KeyPress>", self._on_key_press)
         self.root.bind("<KeyRelease>", self._on_key_release)
         # 失焦时清空按键状态，否则切走再切回来会留下"卡住不放"的键
-        self.root.bind("<FocusOut>", self._release_all)
+        self.root.bind("<FocusOut>", self._on_focus_out)
+        # 绝对模式把光标钉在画布里，必须留一个不靠鼠标的出口
+        self.root.bind("<Escape>", self._on_escape)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._hold_tick)
@@ -93,49 +112,92 @@ class PanelApp:
     # ---------- 鼠标 ----------
 
     def _on_enter(self, e) -> None:
-        # 进入时必须把坐标也初始化：绝对模式的点击用 self.cur 定位，
-        # 若只在 <Motion> 里更新，进来直接点就会拿初始值 (0,0)，点击落到左上角。
-        self.last = (e.x, e.y)
-        self.cur = (e.x, e.y)
-        # 只有相对模式才启用 _tick 的节流发送。绝对模式必须独占通道：
-        # 两种报表混发会让 iOS 端状态错乱——表现就是点击能过、长按撑不住。
         if self.mode == "relative":
+            self.last = (e.x, e.y)
+            self.cur = (e.x, e.y)
             self.shared.capturing = True
+            return
+        # 绝对模式：一进来就"抓住"光标，把它钉在画布中心。
+        # 之后位置全部由相对位移累积，光标在哪儿不再影响落点，
+        # 手可以一直往一个方向推，不必担心撞到窗口边缘。
+        self._begin_capture()
+
+    def _begin_capture(self) -> None:
+        if self._capturing:
+            return
+        self._capturing = True
+        self.shared.capturing = True
+        self.cursor.hide()
+        self._last_t = time.monotonic()
+        self._warp_center()
+
+    def _end_capture(self) -> None:
+        if not self._capturing:
+            return
+        self._capturing = False
+        if self.shared.buttons:
+            with self.shared.lock:
+                self.shared.buttons = 0
+            self.worker.send_absolute_px(0, self.vp.x, self.vp.y)
+        self.shared.capturing = False
+        self.cursor.show()
+
+    def _warp_center(self) -> None:
+        """把光标挪回画布中心，同时把基准点重置到中心。
+
+        不重置 last 的话，下一次 Motion 会拿"中心"和"边缘"相减，
+        算出一大截根本不存在的位移。
+        """
+        cx = self.canvas.winfo_width() // 2
+        cy = self.canvas.winfo_height() // 2
+        winput.user32.SetCursorPos(
+            self.canvas.winfo_rootx() + cx, self.canvas.winfo_rooty() + cy
+        )
+        self.last = (cx, cy)
+        self.cur = (cx, cy)
 
     def _on_leave(self, _e) -> None:
+        if self.mode == "absolute":
+            self._end_capture()
+            return
         self.shared.capturing = False
         self.last = None
         # 鼠标移出窗口时若仍按着键，立即放开，否则 iPhone 上会一直按住
         if self.shared.buttons:
             with self.shared.lock:
                 self.shared.buttons = 0
-            if self.mode == "absolute":
-                ax, ay = self._to_abs(*self.cur)
-                self.worker.send_absolute(0, ax, ay)
-            else:
-                self.worker.send_mouse_now(0)
+            self.worker.send_mouse_now(0)
 
     def _on_motion(self, e) -> None:
         self.cur = (e.x, e.y)
         if self.mode == "absolute":
-            with self.shared.lock:
-                buttons = self.shared.buttons
-            if buttons:
-                # 拖动中必须走相对位移：绝对报文不带按钮语义、而"不动的相对报文"
-                # 又构不成拖动。只有「按钮 + 真实 dx/dy」同时出现在一条报文里才行。
-                if self.last is None:
-                    self.last = (e.x, e.y)
-                    return
-                dx = int((e.x - self.last[0]) * self.px_per_count)
-                dy = int((e.y - self.last[1]) * self.px_per_count)
+            if not self._capturing:
+                return
+            if self.last is None:
                 self.last = (e.x, e.y)
-                if dx or dy:
-                    self.worker.send_mouse_now(buttons, dx, dy)
-            else:
-                # 悬停：绝对定位，一条报文到位，没有累积延迟
-                ax, ay = self._to_abs(e.x, e.y)
-                self.worker.send_absolute(0, ax, ay)
-                self.abs_sent += 1
+                return
+            dx = e.x - self.last[0]
+            dy = e.y - self.last[1]
+            self.last = (e.x, e.y)
+            if dx or dy:
+                now = time.monotonic()
+                dt = min(0.1, max(1e-4, now - self._last_t))
+                self._last_t = now
+                with self.shared.lock:
+                    buttons = self.shared.buttons
+                mdx, mdy = self.vp.move(dx, dy, dt)
+                if buttons:
+                    # 拖动只能走相对报文，且必须带真实位移
+                    if int(round(mdx)) or int(round(mdy)):
+                        self.worker.send_mouse_now(buttons, int(round(mdx)), int(round(mdy)))
+                else:
+                    self.worker.send_absolute_px(0, self.vp.x, self.vp.y)
+                    self.abs_sent += 1
+            # 行程再居中：离中心超过半径就挪回去，手可以无限推
+            cx = self.canvas.winfo_width() // 2
+            cy = self.canvas.winfo_height() // 2
+            if abs(e.x - cx) > WARP_RADIUS or abs(e.y - cy) > WARP_RADIUS:
+                self._warp_center()
             return
 
         if not self.shared.capturing:
@@ -157,14 +219,6 @@ class PanelApp:
                 0.0, min(float(self.cal.screen_height - 1),
                          self.shared.target_y + dy * self.px_per_count)
             )
-
-    def _to_abs(self, px: int, py: int) -> tuple[int, int]:
-        """窗口坐标 → 0..32767。用窗口实际绘制区域，避免边距导致偏移。"""
-        w = max(1, self.canvas.winfo_width() - 1)
-        h = max(1, self.canvas.winfo_height() - 1)
-        fx = max(0.0, min(1.0, px / w))
-        fy = max(0.0, min(1.0, py / h))
-        return int(fx * 32767), int(fy * 32767)
 
     # ---------- 鼠标按键 ----------
 
@@ -191,11 +245,9 @@ class PanelApp:
             buttons = self.shared.buttons
         # 立即发，不等节流：按下和抬起若落在同一个 30ms 周期会被合并成"没按过"
         if self.mode == "absolute":
-            ax, ay = self._to_abs(*self.cur)
             # 绝对报文负责"指针在哪"，但它不带按钮语义（实测点击不生效）；
             # 按钮必须再走一条相对报文（dx=dy=0）才能在 iOS 侧成立。
-            self.worker.send_absolute(buttons, ax, ay)
-            self.worker.send_mouse_now(buttons, 0, 0)
+            self.worker.send_absolute_px(buttons, self.vp.x, self.vp.y)
         else:
             self.worker.send_mouse_now(buttons)
         self.click_sent += 1
@@ -217,6 +269,16 @@ class PanelApp:
         if self.kb.clear():
             self.worker.send_report(hid.RID_KEYBOARD, self.kb.report())
 
+    def _on_focus_out(self, e=None) -> None:
+        self._release_all(e)
+        # 切走时一定释放捕获，否则光标被钉在画布里、人却回不到桌面
+        if self.mode == "absolute":
+            self._end_capture()
+
+    def _on_escape(self, _e=None) -> str:
+        self._end_capture()
+        return "break"
+
     def _hold_tick(self) -> None:
         """按住不动时每 100ms 重发一次当前状态。
 
@@ -225,7 +287,7 @@ class PanelApp:
         """
         if self._closed:
             return
-        if self.mode == "absolute" and self.shared.buttons:
+        if self.mode == "absolute" and self._capturing and self.shared.buttons:
             self.worker.send_mouse_now(self.shared.buttons, 0, 0)
         self.root.after(100, self._hold_tick)
 
@@ -235,19 +297,25 @@ class PanelApp:
         if self._closed:
             return
         w = self.worker
-        px, py = w.position
+        if self.mode == "absolute":
+            pos = f"{self.vp.x:>5.0f},{self.vp.y:>5.0f}"
+        else:
+            px, py = w.position
+            pos = f"{px:>5.0f},{py:>5.0f}"
         txt = (
-            f"[{self.mode}] 广播 {self.svc.status}\n"
+            f"[{self.mode}] 广播 {self.svc.status}   捕获 "
+            f"{'ON' if (self._capturing or self.shared.capturing) else 'OFF'}\n"
             f"订阅 {'YES' if self.svc.subscribed else 'NO'}   "
             f"移动 {w.sent + self.abs_sent}  点 {self.click_sent}  "
             f"键 {self.kb_sent}  失败 {w.send_fail}\n"
-            f"预测 {px:>5.0f},{py:>5.0f}  /  {self.cal.screen_width}x{self.cal.screen_height}"
+            f"位置 {pos}  /  {self.cal.screen_width}x{self.cal.screen_height}"
         )
         self.status.config(text=txt)
         self.root.after(400, self._tick_ui)
 
     def _on_close(self) -> None:
         self._closed = True
+        self._end_capture()
         self.shared.capturing = False
         self.shared.running = False
         self.worker.stop()
@@ -259,8 +327,13 @@ class PanelApp:
         if self.worker.error:
             print(f"❌ {self.worker.error}")
             return 1
-        print(f"面板已启动  比例 {self.px_per_count:.3f} iPhone像素/鼠标像素")
-        print("把鼠标移进窗口移动看看 iPhone 指针是否跟随；关窗口退出。")
+        print(f"面板已启动  [{self.mode}]")
+        if self.mode == "absolute":
+            print(f"增益 {self.args.gain:.2f} iPhone像素/计数；"
+                  f"光标离中心 {WARP_RADIUS}px 自动回中，手可以一直推。")
+            print("Esc 或失焦即释放捕获；关窗口退出。")
+        else:
+            print(f"比例 {self.px_per_count:.3f} iPhone像素/鼠标像素")
         self.root.mainloop()
         return 0
 
@@ -270,7 +343,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--calibration", default=CAL_DEFAULT)
     ap.add_argument("--sensitivity", type=float, default=1.0)
     ap.add_argument("--mode", choices=["absolute", "relative"], default="absolute",
-                    help="absolute=绝对坐标(默认,无累积延迟)；relative=相对累积(需校准曲线)")
+                    help="absolute=虚拟绝对坐标(默认，手可无限推)；relative=相对累积")
+    ap.add_argument("--gain", type=float, default=0.5,
+                    help="绝对模式增益：一个鼠标计数换多少 iPhone 像素，默认 0.5")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)

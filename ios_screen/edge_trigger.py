@@ -44,11 +44,22 @@ def edge_name(e: Edge) -> str:
 class EdgeSpec:
     edge: Edge = Edge.Right
     screen: Rect = field(default_factory=Rect)
+    # 沿边的触发区间，0..1 归一化。默认整条边都能触发。
+    # 用途：只让屏幕底部「水平 40% 附近」这一小段成为出口，避免整条底边都误触。
+    zone_start: float = 0.0
+    zone_end: float = 1.0
 
 
 def is_at_edge(spec: EdgeSpec, x: int, y: int, band_px: int = EDGE_BAND_PX) -> bool:
     r = spec.screen
     if x < r.x or y < r.y or x >= r.right or y >= r.bottom:
+        return False
+    # 沿边方向的归一化位置：左右边看 y，上下边看 x
+    if spec.edge in (Edge.Right, Edge.Left):
+        along = (y - r.y) / max(1, r.h - 1)
+    else:
+        along = (x - r.x) / max(1, r.w - 1)
+    if not (spec.zone_start <= along <= spec.zone_end):
         return False
     if spec.edge is Edge.Right:
         return x >= r.right - 1 - band_px

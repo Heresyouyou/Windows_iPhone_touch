@@ -1,4 +1,5 @@
 # 临时下载与诊断产物，不入库
+.cache/
 tools/dl/
 *.log
 *.json.lock
