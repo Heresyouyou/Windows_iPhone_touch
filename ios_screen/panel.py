@@ -138,7 +138,7 @@ class PanelApp:
         if self.shared.buttons:
             with self.shared.lock:
                 self.shared.buttons = 0
-            self.worker.send_absolute_px(0, self.vp.x, self.vp.y)
+            self.worker.send_absolute_px(0, self.vp.x, self.vp.y, relay_button=True)
         self.shared.capturing = False
         self.cursor.show()
 
@@ -246,8 +246,8 @@ class PanelApp:
         # 立即发，不等节流：按下和抬起若落在同一个 30ms 周期会被合并成"没按过"
         if self.mode == "absolute":
             # 绝对报文负责"指针在哪"，但它不带按钮语义（实测点击不生效）；
-            # 按钮必须再走一条相对报文（dx=dy=0）才能在 iOS 侧成立。
-            self.worker.send_absolute_px(buttons, self.vp.x, self.vp.y)
+            # 按下和抬起都要补一条 dx=dy=0 的相对报文，少一条就会卡住不放。
+            self.worker.send_absolute_px(buttons, self.vp.x, self.vp.y, relay_button=True)
         else:
             self.worker.send_mouse_now(buttons)
         self.click_sent += 1

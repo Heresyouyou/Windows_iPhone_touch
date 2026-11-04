@@ -225,14 +225,19 @@ class HogpWorker(threading.Thread):
         except Exception:
             self.send_fail += 1
 
-    def send_absolute_px(self, buttons: int, x: float, y: float) -> None:
-        """按钮状态变化时立即发，不等 10ms 节拍（按下+抬起可能落在同一拍里）。"""
+    def send_absolute_px(self, buttons: int, x: float, y: float,
+                         relay_button: bool = False) -> None:
+        """按钮状态变化时立即发，不等 10ms 节拍（按下+抬起可能落在同一拍里）。
+
+        relay_button=True 时再补一条 dx=dy=0 的相对报文：绝对报文不带按钮语义，
+        按下和抬起都必须由相对通道表达——只发按下不发抬起，iPhone 上就会一直按着。
+        """
         ax, ay = self._to_abs(x, y)
         if self.dry or self.loop is None:
             return
         try:
             asyncio.run_coroutine_threadsafe(self._send_absolute(buttons, ax, ay), self.loop)
-            if buttons:
+            if relay_button:
                 asyncio.run_coroutine_threadsafe(self._send_relative(buttons, 0, 0), self.loop)
         except Exception:
             pass
@@ -387,7 +392,7 @@ class App:
         # 退出时若还按着键，必须补一条释放报文，否则 iPhone 上会一直按住
         if had_buttons:
             if self.mode == "absolute":
-                self.worker.send_absolute_px(0, self.vp.x, self.vp.y)
+                self.worker.send_absolute_px(0, self.vp.x, self.vp.y, relay_button=True)
             else:
                 self.worker.send_mouse_now(0)
 
@@ -484,7 +489,7 @@ class App:
             return
         # 按钮变化立即发：按下和抬起经常落在同一个 10ms 节拍里，等节拍会被合并成"没按过"
         if self.mode == "absolute":
-            self.worker.send_absolute_px(after, self.vp.x, self.vp.y)
+            self.worker.send_absolute_px(after, self.vp.x, self.vp.y, relay_button=True)
         else:
             self.worker.send_mouse_now(after)
 
