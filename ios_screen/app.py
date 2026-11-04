@@ -55,6 +55,13 @@ ENTRY_SIDE = {
     Edge.Bottom: "top",
 }
 
+# 捕获期间的按键重映射（虚拟键码）：给盲控留两个方向键的手感。
+# Tab → ↑，CapsLock → ↓。只在转发给 iPhone 时生效，Windows 本地不受影响。
+KEY_REMAP = {
+    0x09: 0x26,   # Tab      → VK_UP
+    0x14: 0x28,   # CapsLock → VK_DOWN
+}
+
 
 class Shared:
     """主线程与 HOGP 线程的唯一交点。只放数据，不放逻辑。"""
@@ -571,6 +578,7 @@ class App:
             vk, down = self.keyboard.events.popleft()
             if not self.shared.capturing:
                 continue
+            vk = KEY_REMAP.get(vk, vk)
             changed = self.kb.press(vk) if down else self.kb.release(vk)
             if changed:
                 self.worker.send_report(hid.RID_KEYBOARD, self.kb.report())
