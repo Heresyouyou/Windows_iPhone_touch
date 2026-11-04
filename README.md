@@ -1,9 +1,18 @@
 # Windows_iPhone_touch
 
-Control your iPhone with a Windows mouse and keyboard over Bluetooth LE HID.
-**No USB cable, no virtual display driver, no app on the iPhone, no jailbreak.**
+Drive an iPhone from a Windows mouse and keyboard over Bluetooth LE HID — as if the
+phone were one more display sitting just outside the monitor edge.
 
-The pointer follows your mouse, and click, long-press, drag and keyboard input all work.
+Move the cursor past the screen edge (or into a small panel window) and Windows starts
+advertising a standard BLE HID device. The iPhone pairs with it through
+**AssistiveTouch → Devices → Bluetooth Devices** and from then on receives real pointer,
+click, long-press, drag, wheel and keyboard input. Nothing is installed on the phone,
+no USB cable is used, and no virtual display driver is needed — you keep looking at the
+physical screen while Windows only supplies the input.
+
+Two positioning modes ship together: `absolute` (default, virtual coordinates, unlimited
+hand travel) and `relative` (calibration curve, for devices that ignore absolute reports).
+
 This is a Windows rewrite of the macOS [iPhone Use](https://github.com/YueChen-C/iPhone-use) approach.
 
 ---
@@ -239,10 +248,17 @@ Report Map and calibration data are from [iPhone Use](https://github.com/YueChen
 
 # 中文
 
-用 Windows 的鼠标和键盘通过蓝牙 LE HID 控制 iPhone。
-**不插 USB 线、不装虚拟显示驱动、iPhone 上不装任何 App、不需要越狱。**
+用 Windows 的鼠标键盘，通过蓝牙 LE HID 直接操作 iPhone——就像手机是显示器旁边
+接着的又一块屏。
 
-鼠标在窗口里移动，iPhone 上的指针跟着动；点击、长按、拖动、键盘输入全部可用。
+把光标推出显示器边缘（或移进一个小控制面板），Windows 就开始广播一个标准 BLE HID
+设备；iPhone 在「辅助触控 → 设备 → 蓝牙设备」里连上之后，收到的是真正的指针、
+点击、长按、拖动、滚轮和键盘输入。手机端不装任何东西、不插 USB 线、不需要虚拟
+显示驱动——你看着实体屏幕，Windows 只负责把输入送过去。
+
+两种定位模式同时提供：`absolute`（默认，虚拟坐标，手可以无限推）与 `relative`
+（校准曲线，给不认绝对报文的设备用）。
+
 这是 macOS 版 [iPhone Use](https://github.com/YueChen-C/iPhone-use) 方案在 Windows 上的重写。
 
 ---
