@@ -1,9 +1,15 @@
-"""启动台：一个窗口，两个开关，关窗即全部收掉。
+"""启动台：一个窗口，四项操作，关窗即全部收掉。
 
-设计上的几个取舍
-----------------
-· 复选框就是开关本身 —— 勾上代表"现在开着"，而不是"下次启动时开"。
-  状态每秒从进程表回读，谁在外面把进程杀了，界面也会自己跟上。
+为什么是按钮而不是复选框
+------------------------
+复选框有两种读法："现在开着"和"下次启动时开"。用户点下去之前不知道
+会发生什么，点下去之后也不知道是立刻生效还是等下次。拆成「启动」和
+「停止」两个按钮，语义只有一个：按下去就是现在做这件事。按钮的可用
+状态本身就是提示 —— 没跑的时候「停止」是灰的，跑起来之后「启动」变灰。
+
+其余取舍
+--------
+· 状态每秒从进程表回读，谁在外面把进程杀了，界面也会自己跟上。
 · 启停都放到后台线程。停本体最坏要等 10 秒（看门狗 + 虚拟屏），
   在主线程里做会让窗口变成一张不动图片。
 · 关窗就退出、退出就收掉两个功能，这是用户要的语义。代价是 Deskflow
@@ -30,7 +36,6 @@ from AppKit import (
     NSApp,
     NSBackingStoreBuffered,
     NSButton,
-    NSButtonTypeSwitch,
     NSColor,
     NSFont,
     NSFontWeightSemibold,
@@ -87,8 +92,6 @@ class LauncherUI:
         self.note_until = 0.0
         self.quit_requested = False
         self.guard_hint = False
-        self._last = (None, None)
-        self._controls_enabled = None
         self.build()
 
     # ------------------------------------------------------------ 构建
@@ -115,59 +118,61 @@ class LauncherUI:
                                      (24, 306, 380, 18), 12,
                                      _c("secondaryLabelColor")))
 
-        self.card_deskflow = self._card(root, 204)
-        self.card_ios = self._card(root, 108)
-
         installed = controller.deskflow_installed()
-        self.btn_deskflow = self._switch(
-            self.card_deskflow, "Deskflow", (16, 44, 210, 22), "toggleDeskflow:"
-        )
-        if not installed:
-            self.btn_deskflow.setEnabled_(False)
+        self.card_deskflow = self._card(root, 198)
+        self.card_ios = self._card(root, 94)
+
+        # ---- Deskflow 卡片
+        self.card_deskflow.addSubview_(self._label(
+            "Deskflow", (16, 54, 200, 22), 14, _c("labelColor"),
+            NSFontWeightSemibold))
         self.card_deskflow.addSubview_(self._label(
             "Windows / Linux 共用一套键盘鼠标",
-            (16, 20, 280, 18), 11.5, _c("secondaryLabelColor")))
+            (16, 28, 212, 18), 11.5, _c("secondaryLabelColor")))
         self.txt_deskflow = self._label(
             "未安装" if not installed else "已停止",
-            (250, 45, 146, 20), 12, _c("tertiaryLabelColor"),
+            (230, 56, 166, 18), 12, _c("tertiaryLabelColor"),
             align=NSTextAlignmentRight,
         )
         self.card_deskflow.addSubview_(self.txt_deskflow)
+        self.btn_df_start = self._button(
+            self.card_deskflow, "启动", (240, 14, 74, 28), "startDeskflow:")
+        self.btn_df_stop = self._button(
+            self.card_deskflow, "停止", (322, 14, 74, 28), "stopDeskflow:")
+        if not installed:
+            self.btn_df_start.setEnabled_(False)
 
-        self.btn_ios = self._switch(
-            self.card_ios, "iPhone 接入", (16, 44, 210, 22), "toggleIos:"
-        )
+        # ---- iPhone 卡片
+        self.card_ios.addSubview_(self._label(
+            "iPhone 接入", (16, 54, 200, 22), 14, _c("labelColor"),
+            NSFontWeightSemibold))
         self.card_ios.addSubview_(self._label(
             "把 iPhone 当成主屏右边的一块屏",
-            (16, 20, 280, 18), 11.5, _c("secondaryLabelColor")))
+            (16, 28, 212, 18), 11.5, _c("secondaryLabelColor")))
         self.txt_ios = self._label(
-            "已停止", (250, 45, 146, 20), 12, _c("tertiaryLabelColor"),
+            "已停止", (230, 56, 166, 18), 12, _c("tertiaryLabelColor"),
             align=NSTextAlignmentRight,
         )
         self.card_ios.addSubview_(self.txt_ios)
+        self.btn_ios_start = self._button(
+            self.card_ios, "启动", (240, 14, 74, 28), "startIos:")
+        self.btn_ios_stop = self._button(
+            self.card_ios, "停止", (322, 14, 74, 28), "stopIos:")
 
+        # ---- 底部
         self.txt_note = self._label("关闭启动台会同时关闭上面两项",
-                                    (24, 74, 300, 18), 11.5,
+                                    (24, 64, 290, 18), 11.5,
                                     _c("tertiaryLabelColor"))
         root.addSubview_(self.txt_note)
 
-        self.btn_guard = NSButton.alloc().initWithFrame_(NSMakeRect(330, 70, 106, 26))
-        self.btn_guard.setTitle_("解除自动守护")
-        self.btn_guard.setFont_(NSFont.systemFontOfSize_(11.5))
-        self.btn_guard.setBezelStyle_(1)
-        self.btn_guard.setTarget_(self.delegate)
-        self.btn_guard.setAction_("removeGuard:")
+        self.btn_guard = self._button(
+            root, "解除自动守护", (330, 60, 106, 24), "removeGuard:", size=11.5)
         self.btn_guard.setHidden_(True)
-        root.addSubview_(self.btn_guard)
 
-        self.btn_quit = NSButton.alloc().initWithFrame_(NSMakeRect(340, 22, 96, 32))
-        self.btn_quit.setTitle_("全部关闭")
-        self.btn_quit.setFont_(NSFont.systemFontOfSize_(13))
-        self.btn_quit.setBezelStyle_(1)
-        self.btn_quit.setTarget_(self.delegate)
-        self.btn_quit.setAction_("stopAll:")
-        self.btn_quit.setEnabled_(False)
-        root.addSubview_(self.btn_quit)
+        self.btn_all_start = self._button(
+            root, "一键启动", (24, 20, 104, 32), "startAll:", size=13)
+        self.btn_all_stop = self._button(
+            root, "一键关闭", (332, 20, 104, 32), "stopAll:", size=13)
 
         win.makeKeyAndOrderFront_(None)
 
@@ -196,21 +201,20 @@ class LauncherUI:
         f.setTextColor_(color)
         return f
 
-    def _card(self, parent, y):
-        v = CardView.alloc().initWithFrame_(NSMakeRect(24, y, W - 48, 86))
-        parent.addSubview_(v)
-        return v
-
-    def _switch(self, parent, title, rect, action):
+    def _button(self, parent, title, rect, action, size=12.0):
         b = NSButton.alloc().initWithFrame_(NSMakeRect(*rect))
-        b.setButtonType_(NSButtonTypeSwitch)
         b.setTitle_(title)
-        b.setFont_(NSFont.systemFontOfSize_(13.5))
+        b.setFont_(NSFont.systemFontOfSize_(size))
+        b.setBezelStyle_(1)
         b.setTarget_(self.delegate)
         b.setAction_(action)
-        b.setState_(0)
         parent.addSubview_(b)
         return b
+
+    def _card(self, parent, y):
+        v = CardView.alloc().initWithFrame_(NSMakeRect(24, y, W - 48, 96))
+        parent.addSubview_(v)
+        return v
 
     # ------------------------------------------------------------ 刷新
 
@@ -225,19 +229,8 @@ class LauncherUI:
             self._refresh_note()
             return
 
-        # 上一次操作把控件禁掉了，这里必须恢复，否则点一次之后整个窗口就点不动了
-        self._enable_controls(True)
-
         d = controller.deskflow_running()
         i = controller.ios_running()
-
-        # 只在变化时写控件：每秒无条件 setState 会让 switch 反复重绘，看着像在闪
-        if d != self._last[0]:
-            self.btn_deskflow.setState_(1 if d else 0)
-            self._last = (d, self._last[1])
-        if i != self._last[1]:
-            self.btn_ios.setState_(1 if i else 0)
-            self._last = (self._last[0], i)
 
         if not controller.deskflow_installed():
             self._status(self.txt_deskflow, "未安装", _c("systemRedColor"))
@@ -251,7 +244,7 @@ class LauncherUI:
         else:
             self._status(self.txt_ios, "○ 已停止", _c("tertiaryLabelColor"))
 
-        self.btn_quit.setEnabled_(d or i)
+        self._sync_buttons(d, i)
         self._refresh_note()
 
     def _status(self, field, text, color) -> None:
@@ -271,6 +264,18 @@ class LauncherUI:
         self.txt_note.setStringValue_("关闭启动台会同时关闭上面两项")
         self.txt_note.setTextColor_(_c("tertiaryLabelColor"))
 
+    def _sync_buttons(self, d: bool, i: bool) -> None:
+        """按钮的可用状态就是当前能做什么，不需要额外的提示文字。"""
+        busy = bool(self.busy)
+        installed = controller.deskflow_installed()
+        self.btn_df_start.setEnabled_(not busy and installed and not d)
+        self.btn_df_stop.setEnabled_(not busy and d)
+        self.btn_ios_start.setEnabled_(not busy and not i)
+        self.btn_ios_stop.setEnabled_(not busy and i)
+        self.btn_all_start.setEnabled_(not busy and not (d and i))
+        self.btn_all_stop.setEnabled_(not busy and (d or i))
+        self.btn_guard.setEnabled_(not busy)
+
     def _sync_guard_hint(self) -> None:
         loaded = controller.guard_loaded()
         if loaded == self.guard_hint:
@@ -278,28 +283,27 @@ class LauncherUI:
         self.guard_hint = loaded
         self.btn_guard.setHidden_(not loaded)
 
-    # ------------------------------------------------------------ 开关
+    # ------------------------------------------------------------ 动作
 
-    def toggle_deskflow(self, sender) -> None:
-        if sender.state() == 1:
-            self._begin("正在启动 Deskflow…", controller.start_deskflow)
-        else:
-            self._begin("正在关闭 Deskflow…", controller.stop_deskflow)
+    def start_deskflow(self) -> None:
+        self._begin("正在启动 Deskflow…", controller.start_deskflow)
 
-    def toggle_ios(self, sender) -> None:
-        if sender.state() == 1:
-            self._begin("正在启动 iPhone 接入…", controller.start_ios)
-        else:
-            self._begin("正在关闭 iPhone 接入…", controller.stop_ios)
+    def stop_deskflow(self) -> None:
+        self._begin("正在关闭 Deskflow…", controller.stop_deskflow)
+
+    def start_ios(self) -> None:
+        self._begin("正在启动 iPhone 接入…", controller.start_ios)
+
+    def stop_ios(self) -> None:
+        self._begin("正在关闭 iPhone 接入…", controller.stop_ios)
+
+    def start_all(self) -> None:
+        self._begin("正在启动全部…", controller.start_all)
 
     def stop_all(self) -> None:
-        if self.busy:
-            return
         self._begin("正在全部关闭…", controller.stop_all)
 
     def remove_guard(self) -> None:
-        if self.busy:
-            return
         self._begin("正在解除自动守护…", controller.remove_guard)
 
     # ------------------------------------------------------------ 后台执行
@@ -310,7 +314,8 @@ class LauncherUI:
         self.busy = note
         self.note = note
         self.note_until = time.monotonic() + 60
-        self._enable_controls(False)
+        # busy 已经置上，这里会把所有按钮一次禁用，防止连点
+        self._sync_buttons(controller.deskflow_running(), controller.ios_running())
         threading.Thread(target=self._work, args=(fn,), daemon=True).start()
 
     def _work(self, fn) -> None:
@@ -329,15 +334,10 @@ class LauncherUI:
             else:
                 self.note = msg or "操作没有成功，看 ~/Library/Logs/MacPhoneTouch.log"
                 self.note_until = time.monotonic() + 10
-
-    def _enable_controls(self, enabled: bool) -> None:
-        if self._controls_enabled == enabled:
-            return
-        self._controls_enabled = enabled
-        self.btn_deskflow.setEnabled_(enabled and controller.deskflow_installed())
-        self.btn_ios.setEnabled_(enabled)
-        self.btn_quit.setEnabled_(False)
-        self.btn_guard.setEnabled_(enabled)
+            # 最多等 1 秒才有下个 tick，按钮会僵在那里，所以主动叫一次主线程刷新
+            self.delegate.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "tickNow:", None, False
+            )
 
     # ------------------------------------------------------------ 退出
 
@@ -366,11 +366,23 @@ class AppDelegate(NSObject):
     def tick_(self, timer):
         self.ui.tick()
 
-    def toggleDeskflow_(self, sender):
-        self.ui.toggle_deskflow(sender)
+    def tickNow_(self, _):
+        self.ui.tick()
 
-    def toggleIos_(self, sender):
-        self.ui.toggle_ios(sender)
+    def startDeskflow_(self, sender):
+        self.ui.start_deskflow()
+
+    def stopDeskflow_(self, sender):
+        self.ui.stop_deskflow()
+
+    def startIos_(self, sender):
+        self.ui.start_ios()
+
+    def stopIos_(self, sender):
+        self.ui.stop_ios()
+
+    def startAll_(self, sender):
+        self.ui.start_all()
 
     def stopAll_(self, sender):
         self.ui.stop_all()

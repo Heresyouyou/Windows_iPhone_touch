@@ -171,6 +171,28 @@ def stop_all(timeout: float = 10.0) -> None:
         t.join(timeout + 5)
 
 
+def start_all() -> bool:
+    """并行起两个。任何一个没起来就返回 False，界面上看得到谁没亮。"""
+    result = {"deskflow": False, "ios": False}
+
+    def run(key, fn):
+        try:
+            result[key] = bool(fn())
+        except Exception:
+            result[key] = False
+
+    jobs = [
+        threading.Thread(target=run, args=("deskflow", start_deskflow), daemon=True),
+        threading.Thread(target=run, args=("ios", start_ios), daemon=True),
+    ]
+    for t in jobs:
+        t.start()
+    for t in jobs:
+        t.join(45)
+
+    return result["deskflow"] and result["ios"]
+
+
 # ---------------------------------------------------------------- 守护检测
 
 
