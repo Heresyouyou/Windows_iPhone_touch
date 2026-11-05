@@ -22,6 +22,9 @@ build/
 dist/
 *.spec
 
+# 现编的虚拟屏工具：make_app.sh 每次用 clang 从 native/vdisplay.m 重新编译
+native/vdisplay
+
 # 工作区笔记，只留本地
 .workbuddy/
 
