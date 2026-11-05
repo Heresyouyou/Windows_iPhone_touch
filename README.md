@@ -537,9 +537,32 @@ tail -f ~/Library/Logs/MacPhoneTouch.log
 > 不要先在「设置 → 蓝牙」里配对。这条链路必须由辅助触控持有；被系统蓝牙层抢走的话，
 > 辅助触控会一直转圈。
 
-### 跟着 Deskflow 启停（可选）
+### 启动台：两个功能一起管（推荐）
 
-如果这台 Mac 是被 Deskflow 当副屏用，可以让本程序完全跟着它的生命周期走：
+```bash
+./make_app.sh          # 本体
+./make_launcher.sh     # 启动台 → dist/启动台.app
+open "dist/启动台.app"
+```
+
+窗口里只有两个开关：
+
+| 开关 | 勾上 | 取消 |
+|---|---|---|
+| Deskflow | `open -a Deskflow`，等它真的出现在进程表里 | 先 TERM，8 秒不退再 KILL，连带 `deskflow-core` |
+| iPhone 接入 | 经 `run.sh` 拉起本体，虚拟屏出现 | TERM 本体，再收掉 `native/vdisplay` |
+
+- 复选框同时是状态显示：每秒回读进程表。谁在外面把进程杀了，勾也会自己弹回来。
+- **关掉启动台窗口 = 上面两个功能一起关掉。** 这是刻意的语义，代价是 Deskflow
+  即使是你手动开的也会被一起关。
+- 启动台不常驻、不装 launchd。它和下面那套自动守护是**二选一**——
+  两套同时跑会互相打架（守护会把刚被启动台关掉的本体再拉起来）。
+  检测到守护已加载时，窗口底部会提示，并给出「解除自动守护」按钮。
+
+### 跟着 Deskflow 启停（可选，与启动台二选一）
+
+如果这台 Mac 是被 Deskflow 当副屏用，又不想每次手动点，可以让本程序完全跟着
+它的生命周期走：
 
 ```bash
 tools/guard_ctl.sh install     # 装成 LaunchAgent，登录即生效
@@ -656,12 +679,15 @@ NSTimer @30ms ─────────────▶ Sender.tick()          
 ```
 ios_screen/          # 包
   data/              # 校准曲线
+launcher/            # 启动台：controller.py 管进程，app.py 管窗口
 make_app.sh          # 生成 dist/Mac iPhone Touch.app，同时生成 run.sh
+make_launcher.sh     # 生成 dist/启动台.app
 run.sh               # 用户入口（写 launch.args，再 open）
 tools/
   ble_probe.py       # 这台机器允许发布哪些服务 UUID？
   gatt_selfcheck.py  # 连上一台 HID 设备，dump 并核对它的 GATT 表
-tests/               # 90 项，不需要硬件
+  deskflow_guard.sh  # 可选：跟随 Deskflow 自动启停（与启动台二选一）
+tests/               # 114 项，不需要硬件
 ```
 
 ## 单测
