@@ -81,7 +81,7 @@ MODULE=ios_screen.app
 ARGS=()
 
 # 参数从哪来？
-# 本机的 `open --args`（以及 NSWorkspace 的 arguments）实测**完全不传参**：
+# 本机的 \`open --args\`（以及 NSWorkspace 的 arguments）实测**完全不传参**：
 # 拿一个编译过的 .app 试，argv 里只有 argv[0]；换成脚本可执行也一样。
 # 所以参数走文件：run.sh 写一行一个参数，这里读到就删掉。
 # 这样既保住 .app 的 LaunchServices 身份（蓝牙 TCC 只认它），又拿得到参数。
