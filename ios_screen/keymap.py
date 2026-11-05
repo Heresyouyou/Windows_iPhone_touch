@@ -86,17 +86,26 @@ class KeyboardState:
     def __init__(self) -> None:
         self.modifiers = 0
         self.keys: list[int] = []
-        self._mod_stack: dict[int, int] = {}
+        # 当前按住的修饰键 VK 集合。用集合而不是计数：Windows 的自动重复会
+        # 反复送来同一个 KeyPress，计数会一路涨，松开一次永远清不掉那一位，
+        # 表现是"按一下 Shift，之后所有字母都是大写"。
+        self._mods: set[int] = set()
+
+    def _rebuild_modifiers(self) -> int:
+        prev = self.modifiers
+        m = 0
+        for k in self._mods:
+            m |= MODIFIER_BITS[k]
+        self.modifiers = m
+        return prev
 
     def press(self, vk: int) -> bool:
         """返回 True 表示状态变了，需要发报文。"""
         if vk in MODIFIER_BITS:
-            bit = MODIFIER_BITS[vk]
-            # 左右 Shift 都映射到同一个 bit，用计数避免"松开左 Shift 把右 Shift 也清了"
-            prev = self.modifiers
-            self._mod_stack[vk] = self._mod_stack.get(vk, 0) + 1
-            self.modifiers |= bit
-            return self.modifiers != prev
+            if vk in self._mods:
+                return False  # 自动重复，状态没变
+            self._mods.add(vk)
+            return self._rebuild_modifiers() != self.modifiers
         hid = VK_TO_HID.get(vk)
         if hid is None:
             return False
@@ -109,22 +118,10 @@ class KeyboardState:
 
     def release(self, vk: int) -> bool:
         if vk in MODIFIER_BITS:
-            bit = MODIFIER_BITS[vk]
-            n = self._mod_stack.get(vk, 0) - 1
-            if n <= 0:
-                self._mod_stack.pop(vk, None)
-            else:
-                self._mod_stack[vk] = n
-            # 只有该 bit 上所有来源的键都松开了，才清位
-            still = any(
-                MODIFIER_BITS.get(k) == bit and v > 0 for k, v in self._mod_stack.items()
-            )
-            if still:
+            if vk not in self._mods:
                 return False
-            if self.modifiers & bit:
-                self.modifiers &= ~bit
-                return True
-            return False
+            self._mods.discard(vk)
+            return self._rebuild_modifiers() != self.modifiers
         hid = VK_TO_HID.get(vk)
         if hid is None or hid not in self.keys:
             return False
@@ -135,7 +132,7 @@ class KeyboardState:
         changed = self.modifiers != 0 or bool(self.keys)
         self.modifiers = 0
         self.keys.clear()
-        self._mod_stack.clear()
+        self._mods.clear()
         return changed
 
     def report(self) -> bytes:
