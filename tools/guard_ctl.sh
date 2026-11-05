@@ -12,7 +12,8 @@
 # 的标准做法，而且不依赖任何第三方工具。
 set -u
 
-ROOT="/Users/mac/WorkBuddy/2026-11-01-21-03-27/wtouch"
+# 路径从脚本自身位置推，不写死 —— 仓库克隆到哪都能用
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GUARD="$ROOT/tools/deskflow_guard.sh"
 LABEL="work.kust.macphonetouch.guard"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"

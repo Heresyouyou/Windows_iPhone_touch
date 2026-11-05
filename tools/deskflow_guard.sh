@@ -19,7 +19,8 @@
 # 一小会儿（断开连接、清理），拿它当判据会让本程序晚关甚至不关。
 set -u
 
-ROOT="/Users/mac/WorkBuddy/2026-11-01-21-03-27/wtouch"
+# 路径从脚本自身位置推，不写死 —— 仓库克隆到哪都能用
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN="$ROOT/run.sh"
 LOG="$HOME/Library/Logs/MacPhoneTouch-guard.log"
 PIDFILE="$HOME/Library/Application Support/MacPhoneTouch/guard.pid"

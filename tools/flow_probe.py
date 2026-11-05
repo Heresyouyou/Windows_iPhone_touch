@@ -10,12 +10,15 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 
 from AppKit import NSApplication
 
 from ios_screen import mac_input
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from ios_screen.app import App, pump_events
 
 
@@ -30,16 +33,19 @@ class _Args:
         self.list = False
         self.name = "MPT-Flow"
         self.config = None
-        self.calibration = "/Users/mac/WorkBuddy/2026-11-01-21-03-27/wtouch/ios_screen/data/calibration-iphone15pro.json"
+        self.calibration = os.path.join(
+            ROOT, "ios_screen", "data", "calibration-iphone15pro.json"
+        )
         self.mode = "absolute"
-        self.gain = 1.0
+        self.gain = 3.0
         self.accel = 0.0
-        self.escape_px = 5.0
+        self.escape_px = 6.0 * self.gain
         self.wheel_step = 2
         self.sensitivity = 1.0
         self.enter_threshold = 12
         self.exit_threshold = 60
         self.dry_run = True
+        self.no_vscreen = True      # 这个探针验的是边缘模式
         self.home = False
         self.fix_cursor = False
         self.self_test = 0.0

@@ -19,7 +19,7 @@ MARK = "launcher-test-marker-9f3a"
 
 class TestPatterns(unittest.TestCase):
     def test_ios_pattern_matches_the_real_command_line(self):
-        line = "/Users/mac/x/wtouch/.venv/bin/python -u -m ios_screen.app -v"
+        line = "/Users/x/proj/.venv/bin/python -u -m ios_screen.app -v"
         self.assertTrue(re.search(controller.IOS_PATTERN, line))
 
     def test_deskflow_pattern_matches_gui_but_not_core(self):
@@ -31,7 +31,7 @@ class TestPatterns(unittest.TestCase):
         self.assertTrue(re.search(controller.DESKFLOW_CORE_PATTERN, core))
 
     def test_vdisplay_pattern(self):
-        line = "/Users/mac/x/wtouch/native/vdisplay 393 852 1"
+        line = "/Users/x/proj/native/vdisplay 393 852 1"
         self.assertTrue(re.search(controller.VDISPLAY_PATTERN, line))
 
 
